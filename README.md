@@ -7,6 +7,7 @@
 - Agent/daemon mode with Unix Domain Socket IPC
 - CLI control (`start`, `stop`, `restart`, `status`, `logs`, `events`)
 - TUI mode (`pym2 tui`) with keybindings
+- Optional built-in Web UI (`agent.web` config)
 - TOML config, JSON IPC
 - Python `venv + uvicorn` supervision
 - Restart policies with backoff and crash-loop protection
@@ -17,6 +18,23 @@
 - Config: `/etc/pym2/config.toml`
 - Socket: `/run/pym2/pym2.sock`
 - State + logs: `/var/lib/pym2` and `/var/lib/pym2/logs`
+
+## Optional Web UI
+
+The web UI is built into the agent and disabled by default.
+
+```toml
+[agent.web]
+enabled = false
+host = "127.0.0.1"
+port = 17877
+# password = "change-me"
+```
+
+- `enabled`: turns web UI on/off
+- `host`: bind address (`127.0.0.1` or `0.0.0.0`)
+- `port`: HTTP port
+- `password`: optional password; if set, send as `Authorization: Bearer <pw>` or `X-Pym2-Password`
 
 ## Build
 

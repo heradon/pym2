@@ -15,6 +15,8 @@ pub struct AgentConfig {
     pub socket: String,
     #[serde(default = "default_state_dir")]
     pub state_dir: String,
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 impl Default for AgentConfig {
@@ -22,6 +24,7 @@ impl Default for AgentConfig {
         Self {
             socket: default_socket(),
             state_dir: default_state_dir(),
+            web: WebConfig::default(),
         }
     }
 }
@@ -32,6 +35,37 @@ fn default_socket() -> String {
 
 fn default_state_dir() -> String {
     "/var/lib/pym2".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_web_host")]
+    pub host: String,
+    #[serde(default = "default_web_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_web_host(),
+            port: default_web_port(),
+            password: None,
+        }
+    }
+}
+
+fn default_web_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_web_port() -> u16 {
+    17877
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,3 +1,5 @@
+mod web;
+
 use crate::config::{ensure_state_dirs, load_config};
 use crate::error::{PyopsError, Result};
 use crate::ipc::server::{read_line_json, write_line_json};
@@ -41,12 +43,19 @@ pub fn run_agent() -> Result<()> {
     )?;
     listener.set_nonblocking(true)?;
 
+    let web_cfg = cfg.agent.web.clone();
     let (state_dir, _, logs_dir) = ensure_state_dirs(&cfg)?;
     let mut supervisor = Supervisor::new(cfg, state_dir, logs_dir);
     supervisor.start_autostart();
 
     let supervisor = Arc::new(Mutex::new(supervisor));
     let events = Arc::new(Mutex::new(EventBus::default()));
+
+    let web_thread = if web_cfg.enabled {
+        Some(web::spawn_server(web_cfg, Arc::clone(&supervisor)))
+    } else {
+        None
+    };
 
     loop {
         if SHOULD_STOP.load(Ordering::SeqCst) {
@@ -95,7 +104,15 @@ pub fn run_agent() -> Result<()> {
         sup.shutdown_all();
     }
 
+    if let Some(handle) = web_thread {
+        let _ = handle.join();
+    }
+
     Ok(())
+}
+
+pub(crate) fn should_stop() -> bool {
+    SHOULD_STOP.load(Ordering::SeqCst)
 }
 
 fn handle_client(

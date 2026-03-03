@@ -2,6 +2,12 @@
 socket = "/run/pym2/pym2.sock"
 state_dir = "/var/lib/pym2"
 
+[agent.web]
+enabled = false
+host = "127.0.0.1"
+port = 17877
+# password = "change-me"
+
 # Add managed apps below.
 # [[apps]]
 # name = "api"

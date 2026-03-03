@@ -98,5 +98,16 @@ fn validate_config(cfg: &ConfigFile) -> Result<()> {
         }
     }
 
+    if cfg.agent.web.host.trim().is_empty() {
+        return Err(PyopsError::Config(
+            "agent.web.host cannot be empty".to_string(),
+        ));
+    }
+    if cfg.agent.web.port == 0 {
+        return Err(PyopsError::Config(
+            "agent.web.port must be in range 1..65535".to_string(),
+        ));
+    }
+
     Ok(())
 }
