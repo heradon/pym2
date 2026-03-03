@@ -72,6 +72,8 @@ fn default_web_port() -> u16 {
 pub struct AppSpec {
     pub name: String,
     pub cwd: String,
+    #[serde(default)]
+    pub command: Vec<String>,
     pub venv: String,
     pub entry: String,
     #[serde(default)]
@@ -86,6 +88,8 @@ pub struct AppSpec {
     pub kill_timeout_ms: u64,
     #[serde(default)]
     pub restart_schedule: Option<String>,
+    #[serde(default)]
+    pub env_file: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
 }
@@ -116,6 +120,7 @@ pub enum RestartPolicy {
 pub enum AppStatus {
     Running,
     Stopped,
+    Blocked,
     Errored,
 }
 
@@ -127,6 +132,7 @@ pub struct AppRuntimeState {
     pub restart_count: u32,
     pub last_exit_code: Option<i32>,
     pub last_error: Option<String>,
+    pub last_reason: Option<String>,
     pub last_start_attempt_at: Option<u64>,
     pub backoff_until: Option<u64>,
     pub next_scheduled_restart_at: Option<u64>,
@@ -141,6 +147,7 @@ impl Default for AppRuntimeState {
             restart_count: 0,
             last_exit_code: None,
             last_error: None,
+            last_reason: None,
             last_start_attempt_at: None,
             backoff_until: None,
             next_scheduled_restart_at: None,
@@ -152,6 +159,8 @@ impl Default for AppRuntimeState {
 pub struct AppSummary {
     pub name: String,
     pub cwd: String,
+    #[serde(default)]
+    pub command: Vec<String>,
     pub entry: String,
     pub restart: RestartPolicy,
     pub runtime: AppRuntimeState,

@@ -2,7 +2,8 @@ use crate::error::{PyopsError, Result};
 use crate::model::ConfigFile;
 use crate::schedule::parse_restart_schedule;
 use std::env;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub fn default_config_path() -> Result<PathBuf> {
@@ -21,6 +22,18 @@ pub fn load_config_from(path: &Path) -> Result<ConfigFile> {
     let cfg: ConfigFile = toml::from_str(&content)?;
     validate_config(&cfg)?;
     Ok(cfg)
+}
+
+pub fn save_config_to(path: &Path, cfg: &ConfigFile) -> Result<()> {
+    validate_config(cfg)?;
+    let content = toml::to_string_pretty(cfg).map_err(|e| {
+        PyopsError::Config(format!(
+            "failed to serialize config {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    write_atomic(path, content.as_bytes())
 }
 
 pub fn load_config_or_defaults_for_client() -> Result<ConfigFile> {
@@ -77,17 +90,19 @@ fn validate_config(cfg: &ConfigFile) -> Result<()> {
                 app.name
             )));
         }
-        if app.venv.trim().is_empty() {
-            return Err(PyopsError::Config(format!(
-                "app '{}' venv cannot be empty",
-                app.name
-            )));
-        }
-        if app.entry.trim().is_empty() {
-            return Err(PyopsError::Config(format!(
-                "app '{}' entry cannot be empty",
-                app.name
-            )));
+        if app.command.is_empty() {
+            if app.venv.trim().is_empty() {
+                return Err(PyopsError::Config(format!(
+                    "app '{}' venv cannot be empty when command is not set",
+                    app.name
+                )));
+            }
+            if app.entry.trim().is_empty() {
+                return Err(PyopsError::Config(format!(
+                    "app '{}' entry cannot be empty when command is not set",
+                    app.name
+                )));
+            }
         }
         if let Some(schedule) = &app.restart_schedule {
             parse_restart_schedule(schedule)?;
@@ -123,6 +138,19 @@ fn is_loopback_host(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let tmp = path.with_extension("tmp");
+    let mut f = File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +172,7 @@ mod tests {
             apps: vec![AppSpec {
                 name: "api".to_string(),
                 cwd: "/srv/api".to_string(),
+                command: Vec::new(),
                 venv: ".venv".to_string(),
                 entry: "app.main:app".to_string(),
                 args: vec![],
@@ -152,6 +181,7 @@ mod tests {
                 stop_signal: "SIGTERM".to_string(),
                 kill_timeout_ms: 8000,
                 restart_schedule: None,
+                env_file: None,
                 env: HashMap::new(),
             }],
         }
@@ -188,5 +218,19 @@ mod tests {
 
         let err = validate_config(&cfg).expect_err("web checks must still run");
         assert!(err.to_string().contains("agent.web.password"));
+    }
+
+    #[test]
+    fn command_mode_does_not_require_legacy_fields() {
+        let mut cfg = base_config();
+        cfg.apps[0].command = vec![
+            "python".to_string(),
+            "-m".to_string(),
+            "http.server".to_string(),
+        ];
+        cfg.apps[0].venv.clear();
+        cfg.apps[0].entry.clear();
+
+        validate_config(&cfg).expect("command mode should allow empty venv/entry");
     }
 }
