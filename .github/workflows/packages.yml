@@ -1,0 +1,132 @@
+name: Build Packages
+
+on:
+  push:
+    branches: ["main", "master"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  deb:
+    name: deb (${{ matrix.distro }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runs_on }}
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: ubuntu-22.04
+            arch: amd64
+            runs_on: ubuntu-latest
+            image: ubuntu:22.04
+          - distro: ubuntu-24.04
+            arch: amd64
+            runs_on: ubuntu-latest
+            image: ubuntu:24.04
+          - distro: debian-12
+            arch: amd64
+            runs_on: ubuntu-latest
+            image: debian:12
+          - distro: debian-13
+            arch: amd64
+            runs_on: ubuntu-latest
+            image: debian:13
+          - distro: ubuntu-24.04
+            arch: arm64
+            runs_on: ubuntu-24.04-arm
+            image: ubuntu:24.04
+          - distro: debian-12
+            arch: arm64
+            runs_on: ubuntu-24.04-arm
+            image: debian:12
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            curl ca-certificates build-essential pkg-config dpkg-dev git
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+          . "$HOME/.cargo/env"
+          rustc --version
+          cargo --version
+
+      - name: Build deb package
+        run: |
+          . "$HOME/.cargo/env"
+          chmod +x ./scripts/build-deb.sh
+          ./scripts/build-deb.sh --arch ${{ matrix.arch }}
+
+      - name: Upload deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.distro }}-${{ matrix.arch }}
+          path: target/deb/*.deb
+
+  rpm:
+    name: rpm (${{ matrix.distro }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runs_on }}
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora-40
+            arch: x86_64
+            runs_on: ubuntu-latest
+            image: fedora:40
+            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+          - distro: centos-stream-9
+            arch: x86_64
+            runs_on: ubuntu-latest
+            image: quay.io/centos/centos:stream9
+            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+          - distro: rocky-9
+            arch: x86_64
+            runs_on: ubuntu-latest
+            image: rockylinux:9
+            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+          - distro: fedora-40
+            arch: aarch64
+            runs_on: ubuntu-24.04-arm
+            image: fedora:40
+            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+          - distro: centos-stream-9
+            arch: aarch64
+            runs_on: ubuntu-24.04-arm
+            image: quay.io/centos/centos:stream9
+            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+    steps:
+      - name: Install build deps
+        run: |
+          ${{ matrix.install_cmd }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+          . "$HOME/.cargo/env"
+          rustc --version
+          cargo --version
+
+      - name: Build rpm package
+        run: |
+          . "$HOME/.cargo/env"
+          chmod +x ./scripts/build-rpm.sh
+          ./scripts/build-rpm.sh --arch ${{ matrix.arch }}
+
+      - name: Upload rpm artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.distro }}-${{ matrix.arch }}
+          path: target/rpm/*.rpm
