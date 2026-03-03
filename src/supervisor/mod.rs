@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
@@ -548,6 +549,7 @@ impl Supervisor {
         app.state.pid = None;
         app.state.started_at = None;
         app.state.last_exit_code = status.code();
+        app.state.last_exit_signal = status.signal().map(signal_name);
     }
 
     fn is_failure(status: ExitStatus) -> bool {
@@ -709,6 +711,19 @@ fn signal_from_name(name: &str) -> Option<i32> {
     }
 }
 
+fn signal_name(sig: i32) -> String {
+    match sig {
+        libc::SIGTERM => "SIGTERM".to_string(),
+        libc::SIGINT => "SIGINT".to_string(),
+        libc::SIGQUIT => "SIGQUIT".to_string(),
+        libc::SIGHUP => "SIGHUP".to_string(),
+        libc::SIGKILL => "SIGKILL".to_string(),
+        libc::SIGSEGV => "SIGSEGV".to_string(),
+        libc::SIGABRT => "SIGABRT".to_string(),
+        _ => format!("SIG{}", sig),
+    }
+}
+
 fn is_pid_alive(pid: i32) -> bool {
     let rc = unsafe { libc::kill(pid, 0) };
     if rc == 0 {
@@ -852,5 +867,29 @@ mod tests {
 
         assert_eq!(app.consecutive_restarts, 0);
         assert!(app.recent_restarts.is_empty());
+    }
+
+    #[test]
+    fn record_exit_sets_last_exit_signal() {
+        let mut app = ManagedApp {
+            spec: base_spec(),
+            schedule: None,
+            state: AppRuntimeState {
+                started_at: Some(100),
+                ..AppRuntimeState::default()
+            },
+            child: None,
+            recent_restarts: VecDeque::new(),
+            consecutive_restarts: 0,
+        };
+
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("kill -TERM $$")
+            .status()
+            .expect("status");
+        Supervisor::record_exit(&mut app, status, 101);
+
+        assert_eq!(app.state.last_exit_signal.as_deref(), Some("SIGTERM"));
     }
 }
