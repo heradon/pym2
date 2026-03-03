@@ -245,6 +245,7 @@ fn print_status(mut apps: Vec<AppSummary>) {
             .clone()
             .or(app.runtime.last_error.clone())
             .unwrap_or_else(|| "-".to_string());
+        let signal = app.runtime.last_exit_signal.as_deref().unwrap_or("-");
         let cmd = if app.command.is_empty() {
             if app.entry.is_empty() {
                 "-".to_string()
@@ -256,7 +257,7 @@ fn print_status(mut apps: Vec<AppSummary>) {
         };
 
         println!(
-            "{} | {:?} | pid={} | restarts={} | reason={} | {}",
+            "{} | {:?} | pid={} | restarts={} | reason={} | signal={} | {}",
             app.name,
             app.runtime.status,
             app.runtime
@@ -265,6 +266,7 @@ fn print_status(mut apps: Vec<AppSummary>) {
                 .unwrap_or_else(|| "-".to_string()),
             app.runtime.restart_count,
             reason,
+            signal,
             cmd
         );
     }
