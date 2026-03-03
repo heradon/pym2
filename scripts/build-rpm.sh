@@ -131,7 +131,7 @@ Name:           pym2
 Version:        $VERSION
 Release:        $RELEASE%{?dist}
 Summary:        $SUMMARY
-License:        MIT
+License:        AGPL-3.0-or-later
 URL:            $PROJECT_URL
 Packager:       $PACKAGER
 BuildArch:      $ARCH
