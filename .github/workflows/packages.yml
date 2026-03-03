@@ -11,8 +11,33 @@ permissions:
   contents: write
 
 jobs:
+  qa:
+    name: qa (default + minimal features)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+          . "$HOME/.cargo/env"
+          rustc --version
+          cargo --version
+
+      - name: Test (default features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo test --locked
+
+      - name: Test (no default features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo test --locked --no-default-features
+
   deb:
     name: deb (${{ matrix.distro }}-${{ matrix.arch }})
+    needs: qa
     runs-on: ${{ matrix.runs_on }}
     container:
       image: ${{ matrix.image }}
@@ -75,6 +100,7 @@ jobs:
 
   rpm:
     name: rpm (${{ matrix.distro }}-${{ matrix.arch }})
+    needs: qa
     runs-on: ${{ matrix.runs_on }}
     container:
       image: ${{ matrix.image }}
