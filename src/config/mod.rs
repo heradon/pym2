@@ -67,10 +67,6 @@ pub fn expand_tilde(input: &str) -> Result<PathBuf> {
 }
 
 fn validate_config(cfg: &ConfigFile) -> Result<()> {
-    if cfg.apps.is_empty() {
-        return Ok(());
-    }
-
     for app in &cfg.apps {
         if app.name.trim().is_empty() {
             return Err(PyopsError::Config("app name cannot be empty".to_string()));
@@ -108,6 +104,89 @@ fn validate_config(cfg: &ConfigFile) -> Result<()> {
             "agent.web.port must be in range 1..65535".to_string(),
         ));
     }
+    if cfg.agent.web.enabled && !is_loopback_host(cfg.agent.web.host.trim()) {
+        match cfg.agent.web.password.as_ref().map(|p| p.trim()) {
+            Some(password) if !password.is_empty() => {}
+            _ => {
+                return Err(PyopsError::Config(
+                    "agent.web.password must be set when web is enabled on a non-loopback host"
+                        .to_string(),
+                ));
+            }
+        }
+    }
 
     Ok(())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AgentConfig, AppSpec, RestartPolicy, WebConfig};
+    use std::collections::HashMap;
+
+    fn base_config() -> ConfigFile {
+        ConfigFile {
+            agent: AgentConfig {
+                socket: "/run/pym2/pym2.sock".to_string(),
+                state_dir: "/var/lib/pym2".to_string(),
+                web: WebConfig {
+                    enabled: false,
+                    host: "127.0.0.1".to_string(),
+                    port: 17877,
+                    password: None,
+                },
+            },
+            apps: vec![AppSpec {
+                name: "api".to_string(),
+                cwd: "/srv/api".to_string(),
+                venv: ".venv".to_string(),
+                entry: "app.main:app".to_string(),
+                args: vec![],
+                autostart: true,
+                restart: RestartPolicy::OnFailure,
+                stop_signal: "SIGTERM".to_string(),
+                kill_timeout_ms: 8000,
+                restart_schedule: None,
+                env: HashMap::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn non_loopback_web_requires_password() {
+        let mut cfg = base_config();
+        cfg.agent.web.enabled = true;
+        cfg.agent.web.host = "0.0.0.0".to_string();
+        cfg.agent.web.password = None;
+
+        let err = validate_config(&cfg).expect_err("config should fail without password");
+        assert!(err.to_string().contains("agent.web.password"));
+    }
+
+    #[test]
+    fn loopback_web_allows_missing_password() {
+        let mut cfg = base_config();
+        cfg.agent.web.enabled = true;
+        cfg.agent.web.host = "127.0.0.1".to_string();
+        cfg.agent.web.password = None;
+
+        validate_config(&cfg).expect("loopback host should allow no password");
+    }
+
+    #[test]
+    fn web_checks_run_even_when_no_apps() {
+        let mut cfg = base_config();
+        cfg.apps.clear();
+        cfg.agent.web.enabled = true;
+        cfg.agent.web.host = "0.0.0.0".to_string();
+        cfg.agent.web.password = None;
+
+        let err = validate_config(&cfg).expect_err("web checks must still run");
+        assert!(err.to_string().contains("agent.web.password"));
+    }
 }

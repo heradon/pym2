@@ -14,12 +14,13 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Seek, SeekFrom};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
+const MAX_IPC_CLIENTS: usize = 128;
 
 extern "C" fn handle_signal(_: i32) {
     SHOULD_STOP.store(true, Ordering::SeqCst);
@@ -50,6 +51,7 @@ pub fn run_agent() -> Result<()> {
 
     let supervisor = Arc::new(Mutex::new(supervisor));
     let events = Arc::new(Mutex::new(EventBus::default()));
+    let active_clients = Arc::new(AtomicUsize::new(0));
 
     let web_thread = if web_cfg.enabled {
         Some(web::spawn_server(web_cfg, Arc::clone(&supervisor)))
@@ -63,10 +65,17 @@ pub fn run_agent() -> Result<()> {
         }
 
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((mut stream, _)) => {
+                if !try_acquire_slot(&active_clients, MAX_IPC_CLIENTS) {
+                    let _ = write_line_json(&mut stream, &IpcResponse::err("server busy"));
+                    continue;
+                }
+
                 let sup = Arc::clone(&supervisor);
                 let events = Arc::clone(&events);
+                let slots = Arc::clone(&active_clients);
                 thread::spawn(move || {
+                    let _slot = ConnectionSlot::new(slots);
                     if let Err(err) = handle_client(stream, sup, events) {
                         eprintln!("client handler error: {}", err);
                     }
@@ -477,5 +486,39 @@ impl SocketGuard {
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn try_acquire_slot(counter: &AtomicUsize, max: usize) -> bool {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        if current >= max {
+            return false;
+        }
+        match counter.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(next) => current = next,
+        }
+    }
+}
+
+struct ConnectionSlot {
+    counter: Arc<AtomicUsize>,
+}
+
+impl ConnectionSlot {
+    fn new(counter: Arc<AtomicUsize>) -> Self {
+        Self { counter }
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::AcqRel);
     }
 }

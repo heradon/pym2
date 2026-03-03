@@ -2,9 +2,12 @@ use crate::model::{IpcRequest, IpcResponse, WebConfig};
 use crate::{agent, supervisor::Supervisor};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+const MAX_WEB_CONNECTIONS: usize = 64;
 
 pub fn spawn_server(
     config: WebConfig,
@@ -15,6 +18,7 @@ pub fn spawn_server(
 
 fn run_server(config: WebConfig, supervisor: Arc<Mutex<Supervisor>>) {
     let addr = format!("{}:{}", config.host, config.port);
+    let active_connections = Arc::new(AtomicUsize::new(0));
     let listener = match TcpListener::bind(&addr) {
         Ok(listener) => listener,
         Err(err) => {
@@ -30,10 +34,22 @@ fn run_server(config: WebConfig, supervisor: Arc<Mutex<Supervisor>>) {
 
     while !agent::should_stop() {
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((mut stream, _)) => {
+                if !try_acquire_slot(&active_connections, MAX_WEB_CONNECTIONS) {
+                    let _ = write_response(
+                        &mut stream,
+                        503,
+                        "application/json",
+                        "{\"error\":\"server busy\"}",
+                    );
+                    continue;
+                }
+
                 let cfg = config.clone();
                 let sup = Arc::clone(&supervisor);
+                let slots = Arc::clone(&active_connections);
                 thread::spawn(move || {
+                    let _slot = ConnectionSlot::new(slots);
                     if let Err(err) = handle_connection(stream, &cfg, &sup) {
                         eprintln!("web ui request error: {}", err);
                     }
@@ -74,7 +90,7 @@ fn handle_connection(
         .collect();
 
     let (path, query) = split_target(target);
-    if path.starts_with("/api/") && !authorized(config, &headers, target) {
+    if path.starts_with("/api/") && !authorized(config, &headers) {
         return write_response(
             &mut stream,
             401,
@@ -195,7 +211,7 @@ fn handle_ipc_like(supervisor: &Arc<Mutex<Supervisor>>, req: IpcRequest) -> IpcR
     }
 }
 
-fn authorized(config: &WebConfig, headers: &[String], target: &str) -> bool {
+fn authorized(config: &WebConfig, headers: &[String]) -> bool {
     let Some(password) = config.password.as_ref() else {
         return true;
     };
@@ -219,12 +235,6 @@ fn authorized(config: &WebConfig, headers: &[String], target: &str) -> bool {
                     return true;
                 }
             }
-        }
-    }
-
-    if let Some(pw) = query_param(split_target(target).1, "password") {
-        if pw == *password {
-            return true;
         }
     }
 
@@ -299,6 +309,7 @@ fn write_response(
         400 => "400 Bad Request",
         401 => "401 Unauthorized",
         404 => "404 Not Found",
+        503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     };
 
@@ -312,6 +323,40 @@ fn write_response(
     stream.write_all(response.as_bytes())?;
     stream.flush()?;
     Ok(())
+}
+
+fn try_acquire_slot(counter: &AtomicUsize, max: usize) -> bool {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        if current >= max {
+            return false;
+        }
+        match counter.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(next) => current = next,
+        }
+    }
+}
+
+struct ConnectionSlot {
+    counter: Arc<AtomicUsize>,
+}
+
+impl ConnectionSlot {
+    fn new(counter: Arc<AtomicUsize>) -> Self {
+        Self { counter }
+    }
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 const WEB_HTML: &str = r#"<!doctype html>
