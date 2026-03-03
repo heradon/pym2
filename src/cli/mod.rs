@@ -9,6 +9,7 @@ use crate::model::{
     AgentEvent, AppDetails, AppSpec, AppSummary, IpcRequest, LogSource, RestartPolicy,
     StreamLogEvent,
 };
+use crate::schedule::parse_restart_schedule;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
@@ -73,6 +74,8 @@ enum Commands {
         venv: String,
         #[arg(long)]
         env_file: Option<String>,
+        #[arg(long)]
+        restart_schedule: Option<String>,
         #[arg(long, default_value_t = true)]
         autostart: bool,
         #[arg(long, value_enum, default_value_t = CliRestartPolicy::OnFailure)]
@@ -87,6 +90,8 @@ enum Commands {
         command: String,
         #[arg(long)]
         env_file: Option<String>,
+        #[arg(long)]
+        restart_schedule: Option<String>,
         #[arg(long, default_value_t = true)]
         autostart: bool,
         #[arg(long, value_enum, default_value_t = CliRestartPolicy::OnFailure)]
@@ -147,6 +152,7 @@ pub fn run() -> Result<()> {
             port,
             venv,
             env_file,
+            restart_schedule,
             autostart,
             restart,
         } => add_fastapi(
@@ -157,6 +163,7 @@ pub fn run() -> Result<()> {
             port,
             venv,
             env_file,
+            restart_schedule,
             autostart,
             restart.into(),
         ),
@@ -165,9 +172,18 @@ pub fn run() -> Result<()> {
             cwd,
             command,
             env_file,
+            restart_schedule,
             autostart,
             restart,
-        } => add_cmd(name, cwd, command, env_file, autostart, restart.into()),
+        } => add_cmd(
+            name,
+            cwd,
+            command,
+            env_file,
+            restart_schedule,
+            autostart,
+            restart.into(),
+        ),
         command => {
             let client = client_from_config()?;
             run_client_command(command, &client)
@@ -406,6 +422,7 @@ fn add_fastapi(
     port: u16,
     venv: String,
     env_file: Option<String>,
+    restart_schedule: Option<String>,
     autostart: bool,
     restart: RestartPolicy,
 ) -> Result<()> {
@@ -431,7 +448,7 @@ fn add_fastapi(
         restart,
         stop_signal: "SIGTERM".to_string(),
         kill_timeout_ms: 8_000,
-        restart_schedule: None,
+        restart_schedule,
         env_file,
         env: std::collections::HashMap::new(),
     };
@@ -444,6 +461,7 @@ fn add_cmd(
     cwd: String,
     command: String,
     env_file: Option<String>,
+    restart_schedule: Option<String>,
     autostart: bool,
     restart: RestartPolicy,
 ) -> Result<()> {
@@ -466,7 +484,7 @@ fn add_cmd(
         restart,
         stop_signal: "SIGTERM".to_string(),
         kill_timeout_ms: 8_000,
-        restart_schedule: None,
+        restart_schedule,
         env_file,
         env: std::collections::HashMap::new(),
     };
@@ -475,6 +493,10 @@ fn add_cmd(
 }
 
 fn add_app_to_config(app: AppSpec) -> Result<()> {
+    if let Some(schedule) = app.restart_schedule.as_ref() {
+        parse_restart_schedule(schedule)?;
+    }
+
     let path = default_config_path()?;
     let mut cfg = if path.exists() {
         load_config_from(&path)?
