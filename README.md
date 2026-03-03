@@ -90,6 +90,7 @@ env = { PYTHONUNBUFFERED = "1" }
 Shared metadata:
 
 - `packaging/build-metadata.env`
+- `systemd/pym2.service` (installed by deb/rpm packages)
 
 Debian package:
 

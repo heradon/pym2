@@ -120,7 +120,7 @@ install -m 0755 "$ROOT_DIR/target/$RUST_TARGET/release/pym2" "$STAGE_DIR/usr/bin
 install -m 0644 "$ROOT_DIR/packaging/config.toml" "$STAGE_DIR/etc/pym2/config.toml"
 
 if [[ "$USE_SYSTEMD" -eq 1 ]]; then
-  install -m 0644 "$ROOT_DIR/packaging/pym2.service" "$STAGE_DIR/lib/systemd/system/pym2.service"
+  install -m 0644 "$ROOT_DIR/systemd/pym2.service" "$STAGE_DIR/lib/systemd/system/pym2.service"
 fi
 
 cat > "$STAGE_DIR/DEBIAN/control" << CONTROL
@@ -152,7 +152,7 @@ chown -R pym2:pym2 /var/lib/pym2
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload || true
-$(if [[ "$USE_SYSTEMD" -eq 1 && "$ENABLE_SERVICE" -eq 1 ]]; then echo "  systemctl enable pym2.service || true"; fi)
+$(if [[ "$USE_SYSTEMD" -eq 1 && "$ENABLE_SERVICE" -eq 1 ]]; then echo "  systemctl enable --now pym2.service || true"; fi)
 fi
 POSTINST
 

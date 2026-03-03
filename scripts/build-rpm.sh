@@ -122,7 +122,7 @@ cargo build --release --target "$RUST_TARGET"
 install -m 0755 "$ROOT_DIR/target/$RUST_TARGET/release/pym2" "$TOPDIR/SOURCES/pym2"
 install -m 0644 "$ROOT_DIR/packaging/config.toml" "$TOPDIR/SOURCES/config.toml"
 if [[ "$USE_SYSTEMD" -eq 1 ]]; then
-  install -m 0644 "$ROOT_DIR/packaging/pym2.service" "$TOPDIR/SOURCES/pym2.service"
+  install -m 0644 "$ROOT_DIR/systemd/pym2.service" "$TOPDIR/SOURCES/pym2.service"
 fi
 
 SPEC_PATH="$TOPDIR/SPECS/pym2.spec"
@@ -176,7 +176,12 @@ mkdir -p /var/lib/pym2 /var/lib/pym2/logs
 chown -R pym2:pym2 /var/lib/pym2
 $(if [[ "$USE_SYSTEMD" -eq 1 ]]; then
   if [[ "$ENABLE_SERVICE" -eq 1 ]]; then
-    echo "%systemd_post pym2.service"
+    cat << 'EOP'
+if [ -x /usr/bin/systemctl ]; then
+  /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || true
+  /usr/bin/systemctl enable --now pym2.service >/dev/null 2>&1 || true
+fi
+EOP
   else
     cat << 'EOP'
 if [ -x /usr/bin/systemctl ]; then
