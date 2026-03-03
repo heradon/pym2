@@ -49,6 +49,7 @@ impl IpcClient {
         })
     }
 
+    #[allow(dead_code)]
     pub fn stream_logs_until<F, G>(
         &self,
         req: IpcRequest,

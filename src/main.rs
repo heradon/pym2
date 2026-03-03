@@ -13,6 +13,7 @@ mod tui {
     use crate::error::{PyopsError, Result};
     use crate::ipc::client::IpcClient;
 
+    #[allow(dead_code)]
     pub fn run(_: IpcClient) -> Result<()> {
         Err(PyopsError::Config("tui disabled at build time".to_string()))
     }
