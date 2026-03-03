@@ -119,6 +119,8 @@ Useful flags for both scripts:
 
 - `--no-enable-service`
 - `--no-systemd`
+- `--no-default-features`
+- `--features tui,webui` (or any subset)
 
 ## License and attribution
 

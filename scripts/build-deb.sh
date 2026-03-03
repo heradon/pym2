@@ -10,6 +10,8 @@ Usage: ./scripts/build-deb.sh [options]
 
 Options:
   --arch <arch>                Debian architecture (default: dpkg --print-architecture)
+  --no-default-features        Build binary with --no-default-features
+  --features <list>            Extra cargo features (comma-separated)
   --metadata-file <path>       Path to shared metadata env file
   --maintainer <value>         Maintainer field
   --description-short <text>   Control Description short line
@@ -45,6 +47,8 @@ DESCRIPTION_SHORT="${DESCRIPTION_SHORT-}"
 DESCRIPTION_LONG="${DESCRIPTION_LONG-}"
 ENABLE_SERVICE=1
 USE_SYSTEMD=1
+NO_DEFAULT_FEATURES=0
+CARGO_FEATURES=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,6 +58,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --metadata-file)
       METADATA_FILE="$2"
+      shift 2
+      ;;
+    --no-default-features)
+      NO_DEFAULT_FEATURES=1
+      shift
+      ;;
+    --features)
+      CARGO_FEATURES="$2"
       shift 2
       ;;
     --maintainer)
@@ -115,7 +127,14 @@ if [[ "$USE_SYSTEMD" -eq 1 ]]; then
   mkdir -p "$STAGE_DIR/lib/systemd/system"
 fi
 
-cargo build --release --target "$RUST_TARGET"
+cargo_args=(build --release --target "$RUST_TARGET")
+if [[ "$NO_DEFAULT_FEATURES" -eq 1 ]]; then
+  cargo_args+=(--no-default-features)
+fi
+if [[ -n "$CARGO_FEATURES" ]]; then
+  cargo_args+=(--features "$CARGO_FEATURES")
+fi
+cargo "${cargo_args[@]}"
 install -m 0755 "$ROOT_DIR/target/$RUST_TARGET/release/pym2" "$STAGE_DIR/usr/bin/pym2"
 install -m 0644 "$ROOT_DIR/packaging/config.toml" "$STAGE_DIR/etc/pym2/config.toml"
 
