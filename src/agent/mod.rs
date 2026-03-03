@@ -1,3 +1,4 @@
+#[cfg(feature = "webui")]
 mod web;
 
 use crate::config::{ensure_state_dirs, load_config};
@@ -53,9 +54,17 @@ pub fn run_agent() -> Result<()> {
     let events = Arc::new(Mutex::new(EventBus::default()));
     let active_clients = Arc::new(AtomicUsize::new(0));
 
+    #[cfg(feature = "webui")]
     let web_thread = if web_cfg.enabled {
         Some(web::spawn_server(web_cfg, Arc::clone(&supervisor)))
     } else {
+        None
+    };
+    #[cfg(not(feature = "webui"))]
+    let web_thread: Option<thread::JoinHandle<()>> = {
+        if web_cfg.enabled {
+            eprintln!("web ui enabled in config but binary was built without 'webui' feature");
+        }
         None
     };
 
@@ -120,6 +129,7 @@ pub fn run_agent() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(not(feature = "webui"), allow(dead_code))]
 pub(crate) fn should_stop() -> bool {
     SHOULD_STOP.load(Ordering::SeqCst)
 }
