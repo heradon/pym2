@@ -67,6 +67,8 @@ pym2 add-fastapi --name api --cwd /srv/api --entry app.main:app --host 0.0.0.0 -
 pym2 add-cmd --name worker --cwd /srv/worker --command "python worker.py --queue default"
 ```
 
+Note: `add-fastapi` and `add-cmd` write to `/etc/pym2/config.toml`, so run them with enough permissions.
+
 ## Example config
 
 ```toml
@@ -89,6 +91,28 @@ env = { PYTHONUNBUFFERED = "1" }
 
 Legacy mode is still supported if `command` is empty:
 - set `venv`, `entry`, and optional `args`
+
+## Migration (legacy -> command)
+
+Old (legacy):
+
+```toml
+[[apps]]
+name = "api"
+cwd = "/srv/api"
+venv = ".venv"
+entry = "app.main:app"
+args = ["--host", "0.0.0.0", "--port", "8000"]
+```
+
+New (recommended):
+
+```toml
+[[apps]]
+name = "api"
+cwd = "/srv/api"
+command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
 
 `restart_schedule` supports:
 - `daily@HH:MM` (example: `daily@03:00`)
