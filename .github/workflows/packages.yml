@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   qa:
-    name: qa (default + minimal features)
+    name: qa (minimal + full features)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,15 +25,15 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Test (default features)
+      - name: Test (minimal/default features)
         run: |
           . "$HOME/.cargo/env"
           cargo test --locked
 
-      - name: Test (no default features)
+      - name: Test (all features)
         run: |
           . "$HOME/.cargo/env"
-          cargo test --locked --no-default-features
+          cargo test --locked --all-features
 
   deb:
     name: deb (${{ matrix.distro }}-${{ matrix.arch }})
