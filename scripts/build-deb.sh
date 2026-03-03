@@ -134,6 +134,7 @@ fi
 if [[ -n "$CARGO_FEATURES" ]]; then
   cargo_args+=(--features "$CARGO_FEATURES")
 fi
+echo "Building with cargo args: ${cargo_args[*]}"
 cargo "${cargo_args[@]}"
 install -m 0755 "$ROOT_DIR/target/$RUST_TARGET/release/pym2" "$STAGE_DIR/usr/bin/pym2"
 install -m 0644 "$ROOT_DIR/packaging/config.toml" "$STAGE_DIR/etc/pym2/config.toml"
