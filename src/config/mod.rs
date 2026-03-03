@@ -233,4 +233,29 @@ mod tests {
 
         validate_config(&cfg).expect("command mode should allow empty venv/entry");
     }
+
+    #[test]
+    fn save_and_load_roundtrip_command_mode() {
+        let mut cfg = base_config();
+        cfg.apps[0].command = vec![
+            "python".to_string(),
+            "-m".to_string(),
+            "uvicorn".to_string(),
+            "app.main:app".to_string(),
+        ];
+        cfg.apps[0].env_file = Some("/srv/api/.env".to_string());
+        cfg.apps[0].venv.clear();
+        cfg.apps[0].entry.clear();
+
+        let path =
+            std::env::temp_dir().join(format!("pym2-config-test-{}.toml", std::process::id()));
+        let _ = fs::remove_file(&path);
+        save_config_to(&path, &cfg).expect("save config");
+        let loaded = load_config_from(&path).expect("load config");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(loaded.apps.len(), 1);
+        assert_eq!(loaded.apps[0].command, cfg.apps[0].command);
+        assert_eq!(loaded.apps[0].env_file, cfg.apps[0].env_file);
+    }
 }
