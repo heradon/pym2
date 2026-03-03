@@ -426,16 +426,13 @@ fn add_fastapi(
     autostart: bool,
     restart: RestartPolicy,
 ) -> Result<()> {
-    let mut command = vec![
-        "python".to_string(),
-        "-m".to_string(),
-        "uvicorn".to_string(),
-    ];
-    command.push(entry.clone());
-    command.push("--host".to_string());
-    command.push(host);
-    command.push("--port".to_string());
-    command.push(port.to_string());
+    if venv.trim().is_empty() {
+        return Err(PyopsError::Config(
+            "--venv cannot be empty for add-fastapi".to_string(),
+        ));
+    }
+
+    let command = build_fastapi_command(&venv, &entry, &host, port);
 
     let app = AppSpec {
         name,
@@ -454,6 +451,19 @@ fn add_fastapi(
     };
 
     add_app_to_config(app)
+}
+
+fn build_fastapi_command(venv: &str, entry: &str, host: &str, port: u16) -> Vec<String> {
+    vec![
+        format!("{}/bin/python", venv.trim_end_matches('/')),
+        "-m".to_string(),
+        "uvicorn".to_string(),
+        entry.to_string(),
+        "--host".to_string(),
+        host.to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ]
 }
 
 fn add_cmd(
@@ -523,5 +533,19 @@ fn add_app_to_config(app: AppSpec) -> Result<()> {
             )))
         }
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_fastapi_command;
+
+    #[test]
+    fn build_fastapi_command_uses_venv_python() {
+        let cmd = build_fastapi_command(".venv", "app.main:app", "0.0.0.0", 8000);
+        assert_eq!(cmd[0], ".venv/bin/python");
+        assert_eq!(cmd[1], "-m");
+        assert_eq!(cmd[2], "uvicorn");
+        assert_eq!(cmd[3], "app.main:app");
     }
 }

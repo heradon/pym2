@@ -69,6 +69,7 @@ pym2 add-cmd --name worker --cwd /srv/worker --command "python worker.py --queue
 ```
 
 Note: `add-fastapi` and `add-cmd` write to `/etc/pym2/config.toml`, so run them with enough permissions.
+`add-fastapi` uses `--venv` to build the command (`<venv>/bin/python -m uvicorn ...`).
 
 ## Example config
 
