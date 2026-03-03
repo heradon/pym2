@@ -22,6 +22,7 @@ jobs:
         run: |
           curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
           . "$HOME/.cargo/env"
+          rustup component add clippy
           rustc --version
           cargo --version
 
@@ -34,6 +35,16 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           cargo test --locked --all-features
+
+      - name: Clippy (minimal/default features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Clippy (all features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo clippy --locked --all-targets --all-features -- -D warnings
 
   deb:
     name: deb (${{ matrix.distro }}-${{ matrix.arch }})
