@@ -51,6 +51,8 @@ pub struct AppSpec {
     #[serde(default = "default_kill_timeout_ms")]
     pub kill_timeout_ms: u64,
     #[serde(default)]
+    pub restart_schedule: Option<String>,
+    #[serde(default)]
     pub env: HashMap<String, String>,
 }
 
@@ -93,6 +95,7 @@ pub struct AppRuntimeState {
     pub last_error: Option<String>,
     pub last_start_attempt_at: Option<u64>,
     pub backoff_until: Option<u64>,
+    pub next_scheduled_restart_at: Option<u64>,
 }
 
 impl Default for AppRuntimeState {
@@ -106,6 +109,7 @@ impl Default for AppRuntimeState {
             last_error: None,
             last_start_attempt_at: None,
             backoff_until: None,
+            next_scheduled_restart_at: None,
         }
     }
 }

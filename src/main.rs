@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod ipc;
 mod model;
+mod schedule;
 mod supervisor;
 mod tui;
 

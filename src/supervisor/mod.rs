@@ -3,6 +3,7 @@ use crate::model::{
     AppDetails, AppRuntimeState, AppSpec, AppStatus, AppSummary, ConfigFile, LogSource,
     RestartPolicy,
 };
+use crate::schedule::{next_occurrence, parse_restart_schedule, RestartSchedule};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 struct ManagedApp {
     spec: AppSpec,
+    schedule: Option<RestartSchedule>,
     state: AppRuntimeState,
     child: Option<Child>,
     recent_restarts: VecDeque<Instant>,
@@ -35,10 +37,15 @@ impl Supervisor {
     pub fn new(cfg: ConfigFile, state_dir: PathBuf, logs_dir: PathBuf) -> Self {
         let mut apps = HashMap::new();
         for spec in cfg.apps {
+            let schedule = spec
+                .restart_schedule
+                .as_ref()
+                .and_then(|s| parse_restart_schedule(s).ok());
             apps.insert(
                 spec.name.clone(),
                 ManagedApp {
                     spec,
+                    schedule,
                     state: AppRuntimeState::default(),
                     child: None,
                     recent_restarts: VecDeque::new(),
@@ -53,6 +60,7 @@ impl Supervisor {
             apps,
         };
         let _ = sup.restore_runtime_state();
+        sup.refresh_all_schedule_targets(unix_now());
         sup
     }
 
@@ -166,11 +174,14 @@ impl Supervisor {
 
     pub fn tick(&mut self) {
         let now = Instant::now();
+        let now_epoch = unix_now();
         let names = self.apps.keys().cloned().collect::<Vec<_>>();
         let mut changed = false;
 
         for name in names {
             let mut needs_restart = false;
+            let mut scheduled_restart_due = false;
+            let mut scheduled_restart_allowed = false;
             if let Some(app) = self.apps.get_mut(&name) {
                 if let Some(child) = app.child.as_mut() {
                     match child.try_wait() {
@@ -214,6 +225,22 @@ impl Supervisor {
                         }
                     }
                 }
+
+                if let Some(next_at) = app.state.next_scheduled_restart_at {
+                    if now_epoch >= next_at {
+                        scheduled_restart_due = true;
+                        scheduled_restart_allowed = app.state.status == AppStatus::Running;
+                    }
+                }
+            }
+
+            if scheduled_restart_due {
+                if scheduled_restart_allowed {
+                    if self.stop_one(&name).is_ok() && self.start_one(&name).is_ok() {
+                        changed = true;
+                    }
+                }
+                self.refresh_schedule_target_for(&name, unix_now());
             }
 
             if needs_restart {
@@ -311,6 +338,7 @@ impl Supervisor {
             }
         }
 
+        self.refresh_all_schedule_targets(unix_now());
         Ok(())
     }
 
@@ -396,6 +424,10 @@ impl Supervisor {
                 app.state.started_at = Some(unix_now());
                 app.state.last_error = None;
                 app.child = Some(child);
+                if let Some(schedule) = app.schedule {
+                    app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now())
+                        .or(app.state.next_scheduled_restart_at);
+                }
                 Ok(())
             }
             Err(err) => {
@@ -451,6 +483,9 @@ impl Supervisor {
                 app.state.started_at = None;
                 app.state.backoff_until = None;
                 app.consecutive_restarts = 0;
+                if let Some(schedule) = app.schedule {
+                    app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now());
+                }
                 return Ok(());
             }
 
@@ -471,6 +506,9 @@ impl Supervisor {
         app.state.started_at = None;
         app.state.backoff_until = None;
         app.consecutive_restarts = 0;
+        if let Some(schedule) = app.schedule {
+            app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now());
+        }
         Ok(())
     }
 
@@ -536,6 +574,21 @@ impl Supervisor {
         }
 
         Ok(lines)
+    }
+
+    fn refresh_all_schedule_targets(&mut self, now_epoch: u64) {
+        let names: Vec<String> = self.apps.keys().cloned().collect();
+        for name in names {
+            self.refresh_schedule_target_for(&name, now_epoch);
+        }
+    }
+
+    fn refresh_schedule_target_for(&mut self, name: &str, now_epoch: u64) {
+        if let Some(app) = self.apps.get_mut(name) {
+            app.state.next_scheduled_restart_at = app
+                .schedule
+                .and_then(|schedule| next_occurrence(schedule, now_epoch));
+        }
     }
 }
 

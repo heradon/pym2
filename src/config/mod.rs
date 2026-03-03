@@ -1,5 +1,6 @@
 use crate::error::{PyopsError, Result};
 use crate::model::ConfigFile;
+use crate::schedule::parse_restart_schedule;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -91,6 +92,9 @@ fn validate_config(cfg: &ConfigFile) -> Result<()> {
                 "app '{}' entry cannot be empty",
                 app.name
             )));
+        }
+        if let Some(schedule) = &app.restart_schedule {
+            parse_restart_schedule(schedule)?;
         }
     }
 

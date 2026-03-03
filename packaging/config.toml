@@ -13,4 +13,5 @@ state_dir = "/var/lib/pym2"
 # restart = "on-failure"
 # stop_signal = "SIGTERM"
 # kill_timeout_ms = 8000
+# restart_schedule = "daily@03:00"
 # env = { PYTHONUNBUFFERED = "1" }

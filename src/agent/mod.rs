@@ -10,7 +10,6 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Seek, SeekFrom};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,7 +35,10 @@ pub fn run_agent() -> Result<()> {
     }
 
     let listener = UnixListener::bind(&socket_path)?;
-    std::fs::set_permissions(&socket_path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    std::fs::set_permissions(
+        &socket_path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )?;
     listener.set_nonblocking(true)?;
 
     let (state_dir, _, logs_dir) = ensure_state_dirs(&cfg)?;

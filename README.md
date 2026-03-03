@@ -59,8 +59,13 @@ autostart = true
 restart = "on-failure"
 stop_signal = "SIGTERM"
 kill_timeout_ms = 8000
+restart_schedule = "daily@03:00"
 env = { PYTHONUNBUFFERED = "1" }
 ```
+
+`restart_schedule` supports:
+- `daily@HH:MM` (example: `daily@03:00`)
+- `weekly@sun HH:MM` (example: `weekly@sun 03:00`)
 
 ## Packaging
 
