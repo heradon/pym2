@@ -725,3 +725,132 @@ fn unix_now() -> u64 {
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn base_spec() -> AppSpec {
+        AppSpec {
+            name: "api".to_string(),
+            cwd: "/tmp".to_string(),
+            command: Vec::new(),
+            venv: ".venv".to_string(),
+            entry: "app.main:app".to_string(),
+            args: vec!["--port".to_string(), "8000".to_string()],
+            autostart: true,
+            restart: RestartPolicy::OnFailure,
+            stop_signal: "SIGTERM".to_string(),
+            kill_timeout_ms: 8000,
+            restart_schedule: None,
+            env_file: None,
+            env: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn build_command_uses_command_mode_when_present() {
+        let mut spec = base_spec();
+        spec.command = vec![
+            "python".to_string(),
+            "-m".to_string(),
+            "http.server".to_string(),
+            "9000".to_string(),
+        ];
+        let (exec, args) = build_command(&spec).expect("build command");
+        assert_eq!(exec, PathBuf::from("python"));
+        assert_eq!(args, vec!["-m", "http.server", "9000"]);
+    }
+
+    #[test]
+    fn build_command_uses_legacy_python_fallback() {
+        let mut spec = base_spec();
+        let unique = format!("pym2-supervisor-test-{}", std::process::id());
+        let root = std::env::temp_dir().join(unique);
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".venv/bin")).expect("create dir");
+
+        spec.cwd = root.to_str().expect("temp path to utf8").to_string();
+        let (exec, args) = build_command(&spec).expect("build command");
+
+        assert_eq!(exec, root.join(".venv/bin/python"));
+        assert_eq!(
+            args,
+            vec![
+                "-m".to_string(),
+                "uvicorn".to_string(),
+                "app.main:app".to_string(),
+                "--port".to_string(),
+                "8000".to_string()
+            ]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_env_file_parses_simple_lines() {
+        let unique = format!("pym2-env-test-{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("{}.env", unique));
+        fs::write(
+            &path,
+            "# comment\nA=1\nB =  two \ninvalid\n =skip\nEMPTY=\n",
+        )
+        .expect("write env file");
+
+        let env = load_env_file(&path).expect("parse env file");
+        assert_eq!(env.get("A").map(String::as_str), Some("1"));
+        assert_eq!(env.get("B").map(String::as_str), Some("two"));
+        assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
+        assert!(!env.contains_key("invalid"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn schedule_restart_blocks_after_limit() {
+        let mut app = ManagedApp {
+            spec: base_spec(),
+            schedule: None,
+            state: AppRuntimeState::default(),
+            child: None,
+            recent_restarts: VecDeque::new(),
+            consecutive_restarts: 0,
+        };
+
+        let now = Instant::now();
+        for _ in 0..MAX_RESTARTS_IN_WINDOW {
+            assert!(Supervisor::schedule_restart(&mut app, now));
+        }
+        assert!(!Supervisor::schedule_restart(&mut app, now));
+        assert_eq!(app.state.status, AppStatus::Blocked);
+        assert_eq!(
+            app.state.last_reason.as_deref(),
+            Some("max_restarts_exceeded")
+        );
+    }
+
+    #[test]
+    fn record_exit_resets_restart_counters_after_success_grace() {
+        let mut app = ManagedApp {
+            spec: base_spec(),
+            schedule: None,
+            state: AppRuntimeState {
+                started_at: Some(100),
+                ..AppRuntimeState::default()
+            },
+            child: None,
+            recent_restarts: VecDeque::from([Instant::now()]),
+            consecutive_restarts: 3,
+        };
+
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg("exit 1")
+            .status()
+            .expect("status");
+        Supervisor::record_exit(&mut app, status, 100 + SUCCESS_AFTER_SECS);
+
+        assert_eq!(app.consecutive_restarts, 0);
+        assert!(app.recent_restarts.is_empty());
+    }
+}
