@@ -41,8 +41,13 @@ port = 17877
 ```bash
 cargo build --release
 
+# Default binary (includes TUI, excludes Web UI)
+
 # Minimal binary (without TUI and Web UI)
 cargo build --release --no-default-features
+
+# Enable Web UI build support
+cargo build --release --features webui
 ```
 
 ## Run
