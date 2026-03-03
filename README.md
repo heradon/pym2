@@ -56,6 +56,7 @@ pym2 start <name|all>
 pym2 stop <name|all>
 pym2 restart <name|all>
 pym2 status [--json]
+pym2 inspect <name> [--json]
 pym2 logs <name> [--tail 200] [--follow]
 pym2 events --follow
 

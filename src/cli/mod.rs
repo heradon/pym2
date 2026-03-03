@@ -6,7 +6,8 @@ use crate::config::{
 use crate::error::{PyopsError, Result};
 use crate::ipc::client::IpcClient;
 use crate::model::{
-    AgentEvent, AppSpec, AppSummary, IpcRequest, LogSource, RestartPolicy, StreamLogEvent,
+    AgentEvent, AppDetails, AppSpec, AppSummary, IpcRequest, LogSource, RestartPolicy,
+    StreamLogEvent,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -34,6 +35,11 @@ enum Commands {
         name: String,
     },
     Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Inspect {
+        name: String,
         #[arg(long)]
         json: bool,
     },
@@ -175,6 +181,7 @@ fn run_client_command(command: Commands, client: &IpcClient) -> Result<()> {
         Commands::Stop { name } => simple_action(client, IpcRequest::Stop { name }),
         Commands::Restart { name } => simple_action(client, IpcRequest::Restart { name }),
         Commands::Status { json } => status(client, json),
+        Commands::Inspect { name, json } => inspect(client, name, json),
         Commands::Logs {
             name,
             tail,
@@ -233,6 +240,67 @@ fn status(client: &IpcClient, as_json: bool) -> Result<()> {
 
     let apps: Vec<AppSummary> = serde_json::from_value(apps_val)?;
     print_status(apps);
+    Ok(())
+}
+
+fn inspect(client: &IpcClient, name: String, as_json: bool) -> Result<()> {
+    let resp = client.request(IpcRequest::GetApp { name })?;
+    if !resp.ok {
+        return Err(PyopsError::Ipc(
+            resp.error.unwrap_or_else(|| "inspect failed".to_string()),
+        ));
+    }
+
+    let data = resp
+        .data
+        .ok_or_else(|| PyopsError::Ipc("inspect returned empty payload".to_string()))?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&data)?);
+        return Ok(());
+    }
+
+    let app_val = data
+        .get("app")
+        .ok_or_else(|| PyopsError::Ipc("inspect payload missing 'app'".to_string()))?
+        .clone();
+    let app: AppDetails = serde_json::from_value(app_val)?;
+
+    let command = if app.spec.command.is_empty() {
+        format!("legacy:{} {}", app.spec.entry, app.spec.args.join(" "))
+    } else {
+        app.spec.command.join(" ")
+    };
+    let reason = app
+        .runtime
+        .last_reason
+        .clone()
+        .or(app.runtime.last_error.clone())
+        .unwrap_or_else(|| "-".to_string());
+    let signal = app.runtime.last_exit_signal.as_deref().unwrap_or("-");
+
+    println!("name: {}", app.spec.name);
+    println!("status: {:?}", app.runtime.status);
+    println!(
+        "pid: {}",
+        app.runtime
+            .pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    println!("cwd: {}", app.spec.cwd);
+    println!("command: {}", command.trim());
+    println!("env_file: {}", app.spec.env_file.as_deref().unwrap_or("-"));
+    println!(
+        "restart: {:?} | count: {} | next_schedule: {}",
+        app.spec.restart,
+        app.runtime.restart_count,
+        app.runtime
+            .next_scheduled_restart_at
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    println!("reason: {} | signal: {}", reason, signal);
     Ok(())
 }
 
