@@ -4,6 +4,7 @@
 # Package outputs
 *.deb
 *.rpm
+*.zip
 
 # macOS
 .DS_Store
