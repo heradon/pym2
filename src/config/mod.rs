@@ -103,6 +103,20 @@ fn validate_config(cfg: &ConfigFile) -> Result<()> {
                     app.name
                 )));
             }
+        } else if app.command[0].trim().is_empty() {
+            return Err(PyopsError::Config(format!(
+                "app '{}' command executable cannot be empty",
+                app.name
+            )));
+        }
+
+        if let Some(env_file) = app.env_file.as_ref() {
+            if env_file.trim().is_empty() {
+                return Err(PyopsError::Config(format!(
+                    "app '{}' env_file cannot be empty",
+                    app.name
+                )));
+            }
         }
         if let Some(schedule) = &app.restart_schedule {
             parse_restart_schedule(schedule)?;
@@ -257,5 +271,25 @@ mod tests {
         assert_eq!(loaded.apps.len(), 1);
         assert_eq!(loaded.apps[0].command, cfg.apps[0].command);
         assert_eq!(loaded.apps[0].env_file, cfg.apps[0].env_file);
+    }
+
+    #[test]
+    fn command_mode_rejects_empty_executable() {
+        let mut cfg = base_config();
+        cfg.apps[0].command = vec![" ".to_string(), "-m".to_string(), "uvicorn".to_string()];
+        cfg.apps[0].venv.clear();
+        cfg.apps[0].entry.clear();
+
+        let err = validate_config(&cfg).expect_err("empty executable should fail");
+        assert!(err.to_string().contains("command executable"));
+    }
+
+    #[test]
+    fn rejects_empty_env_file_path() {
+        let mut cfg = base_config();
+        cfg.apps[0].env_file = Some(" ".to_string());
+
+        let err = validate_config(&cfg).expect_err("empty env_file should fail");
+        assert!(err.to_string().contains("env_file"));
     }
 }
