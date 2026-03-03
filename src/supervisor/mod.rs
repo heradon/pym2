@@ -408,18 +408,7 @@ impl Supervisor {
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
 
-        let mut env_map = HashMap::new();
-        if let Some(env_file) = app.spec.env_file.as_ref() {
-            let env_path = if Path::new(env_file).is_absolute() {
-                PathBuf::from(env_file)
-            } else {
-                cwd.join(env_file)
-            };
-            env_map.extend(load_env_file(&env_path)?);
-        }
-        for (k, v) in &app.spec.env {
-            env_map.insert(k.clone(), v.clone());
-        }
+        let env_map = build_app_env(&app.spec, &cwd)?;
         for (k, v) in env_map {
             cmd.env(k, v);
         }
@@ -675,6 +664,22 @@ fn load_env_file(path: &Path) -> Result<HashMap<String, String>> {
     Ok(env)
 }
 
+fn build_app_env(app: &AppSpec, cwd: &Path) -> Result<HashMap<String, String>> {
+    let mut env_map = HashMap::new();
+    if let Some(env_file) = app.env_file.as_ref() {
+        let env_path = if Path::new(env_file).is_absolute() {
+            PathBuf::from(env_file)
+        } else {
+            cwd.join(env_file)
+        };
+        env_map.extend(load_env_file(&env_path)?);
+    }
+    for (k, v) in &app.env {
+        env_map.insert(k.clone(), v.clone());
+    }
+    Ok(env_map)
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -819,6 +824,29 @@ mod tests {
         assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
         assert!(!env.contains_key("invalid"));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn build_app_env_prefers_inline_env_over_env_file() {
+        let mut spec = base_spec();
+        let unique = format!("pym2-env-merge-test-{}", std::process::id());
+        let cwd = std::env::temp_dir().join(unique);
+        let _ = fs::remove_dir_all(&cwd);
+        fs::create_dir_all(&cwd).expect("create dir");
+
+        let env_path = cwd.join("app.env");
+        fs::write(&env_path, "A=file\nB=file\n").expect("write env file");
+
+        spec.env_file = Some("app.env".to_string());
+        spec.env.insert("B".to_string(), "inline".to_string());
+        spec.env.insert("C".to_string(), "inline".to_string());
+
+        let merged = build_app_env(&spec, &cwd).expect("merge env");
+        assert_eq!(merged.get("A").map(String::as_str), Some("file"));
+        assert_eq!(merged.get("B").map(String::as_str), Some("inline"));
+        assert_eq!(merged.get("C").map(String::as_str), Some("inline"));
+
+        let _ = fs::remove_dir_all(&cwd);
     }
 
     #[test]
