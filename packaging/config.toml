@@ -12,9 +12,11 @@ port = 17877
 # [[apps]]
 # name = "api"
 # cwd = "/srv/api"
-# venv = ".venv"
-# entry = "app.main:app"
-# args = ["--host", "0.0.0.0", "--port", "8000"]
+# command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# env_file = "/srv/api/.env"
+# venv = ".venv" # legacy mode only (if command is empty)
+# entry = "app.main:app" # legacy mode only
+# args = ["--host", "0.0.0.0", "--port", "8000"] # legacy mode only
 # autostart = true
 # restart = "on-failure"
 # stop_signal = "SIGTERM"

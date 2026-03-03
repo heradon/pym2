@@ -9,7 +9,7 @@
 - TUI mode (`pym2 tui`) with keybindings
 - Optional built-in Web UI (`agent.web` config)
 - TOML config, JSON IPC
-- Python `venv + uvicorn` supervision
+- Generic process supervision via `command[]` (with legacy `venv + uvicorn` fallback)
 - Restart policies with backoff and crash-loop protection
 - System packaging support for `.deb` and `.rpm`
 
@@ -34,12 +34,15 @@ port = 17877
 - `enabled`: turns web UI on/off
 - `host`: bind address (`127.0.0.1` or `0.0.0.0`)
 - `port`: HTTP port
-- `password`: optional password; if set, send as `Authorization: Bearer <pw>` or `X-Pym2-Password`
+- `password`: optional on loopback; required when `enabled=true` and host is non-loopback
 
 ## Build
 
 ```bash
 cargo build --release
+
+# Minimal binary (without TUI and Web UI)
+cargo build --release --no-default-features
 ```
 
 ## Run
@@ -58,6 +61,10 @@ pym2 events --follow
 
 # TUI
 pym2 tui
+
+# Add apps (writes /etc/pym2/config.toml)
+pym2 add-fastapi --name api --cwd /srv/api --entry app.main:app --host 0.0.0.0 --port 8000
+pym2 add-cmd --name worker --cwd /srv/worker --command "python worker.py --queue default"
 ```
 
 ## Example config
@@ -70,9 +77,8 @@ state_dir = "/var/lib/pym2"
 [[apps]]
 name = "api"
 cwd = "/srv/api"
-venv = ".venv"
-entry = "app.main:app"
-args = ["--host", "0.0.0.0", "--port", "8000"]
+command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+env_file = "/srv/api/.env"
 autostart = true
 restart = "on-failure"
 stop_signal = "SIGTERM"
@@ -80,6 +86,9 @@ kill_timeout_ms = 8000
 restart_schedule = "daily@03:00"
 env = { PYTHONUNBUFFERED = "1" }
 ```
+
+Legacy mode is still supported if `command` is empty:
+- set `venv`, `entry`, and optional `args`
 
 `restart_schedule` supports:
 - `daily@HH:MM` (example: `daily@03:00`)
