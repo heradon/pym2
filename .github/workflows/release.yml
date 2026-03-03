@@ -90,12 +90,12 @@ jobs:
             arch: x86_64
             runs_on: ubuntu-latest
             image: quay.io/centos/centos:stream9
-            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+            install_cmd: dnf -y install curl-minimal ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
           - distro: rocky-9
             arch: x86_64
             runs_on: ubuntu-latest
             image: rockylinux:9
-            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+            install_cmd: dnf -y install curl-minimal ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
           - distro: fedora-40
             arch: aarch64
             runs_on: ubuntu-24.04-arm
@@ -105,7 +105,7 @@ jobs:
             arch: aarch64
             runs_on: ubuntu-24.04-arm
             image: quay.io/centos/centos:stream9
-            install_cmd: dnf -y install curl ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
+            install_cmd: dnf -y install curl-minimal ca-certificates gcc make rpm-build systemd-rpm-macros shadow-utils git
     steps:
       - name: Install build deps
         run: |
