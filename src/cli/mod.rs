@@ -39,6 +39,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Show detailed information for one app.
     Inspect {
         name: String,
         #[arg(long)]
@@ -59,6 +60,7 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         follow: bool,
     },
+    /// Add a FastAPI/Uvicorn app to /etc/pym2/config.toml.
     AddFastapi {
         #[arg(long)]
         name: String,
@@ -81,6 +83,7 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliRestartPolicy::OnFailure)]
         restart: CliRestartPolicy,
     },
+    /// Add a generic command-based app to /etc/pym2/config.toml.
     AddCmd {
         #[arg(long)]
         name: String,
