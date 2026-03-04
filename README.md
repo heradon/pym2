@@ -1,8 +1,9 @@
-
 # pym2
 
-[![CI](https://github.com/heradon/pym2/docs/tui.png)](https://github.com/USER/pym2/actions)
+[![CI](https://github.com/heradon/pym2/actions/workflows/ci.yml/badge.svg)](https://github.com/heradon/pym2/actions)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+
+![pym2 TUI](https://raw.githubusercontent.com/heradon/pym2/main/docs/tui.png)
 
 **pym2** is a lightweight Linux-first process manager for Python services.
 
