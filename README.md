@@ -64,15 +64,15 @@ pym2 stop <name|all>
 pym2 restart <name|all>
 pym2 status [--json]
 pym2 inspect <name> [--json]
-pym2 logs <name> [--tail 200] [--follow]
+pym2 logs <name> -f
 pym2 events --follow
 
 # TUI
 pym2 tui
 
 # Add apps (writes /etc/pym2/config.toml)
-pym2 add-fastapi --name api --cwd /srv/api --entry app.main:app --host 0.0.0.0 --port 8000 --restart-schedule "daily@03:00"
-pym2 add-cmd --name worker --cwd /srv/worker --command "python worker.py --queue default" --restart-schedule "weekly@sun 03:00"
+pym2 add-fastapi --name api --cwd /srv/api --entry app.main:app --venv .venv --host 0.0.0.0 --port 8000 --restart-schedule "daily@03:00"
+pym2 add-cmd --name worker --cwd /srv/worker --command "python worker.py --queue default"
 ```
 
 Note: `add-fastapi` and `add-cmd` write to `/etc/pym2/config.toml`, so run them with enough permissions.
@@ -126,6 +126,9 @@ command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--po
 `restart_schedule` supports:
 - `daily@HH:MM` (example: `daily@03:00`)
 - `weekly@sun HH:MM` (example: `weekly@sun 03:00`)
+
+Crash-loop protection default:
+- more than `5` restarts in `60` seconds -> app status `Errored` with reason `max_restarts_exceeded`
 
 ## Packaging
 

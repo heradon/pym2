@@ -8,7 +8,7 @@
 - Improved restart behavior:
   - success grace reset after 10s runtime
   - crash-loop guard at `>5 restarts in 60s`
-  - explicit `blocked` state and `last_reason`
+  - clear `errored` state with `last_reason`
 - Runtime persistence now writes atomically and includes `schema_version`.
 - New CLI helper commands:
   - `pym2 add-fastapi ...`
