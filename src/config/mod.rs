@@ -7,6 +7,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub fn default_config_path() -> Result<PathBuf> {
+    if let Ok(path) = env::var("PYM2_CONFIG") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
     Ok(PathBuf::from("/etc/pym2/config.toml"))
 }
 
@@ -21,6 +27,14 @@ pub fn load_config_from(path: &Path) -> Result<ConfigFile> {
     })?;
     let cfg: ConfigFile = toml::from_str(&content)?;
     validate_config(&cfg)?;
+    for app in &cfg.apps {
+        if app.command.is_empty() && !app.venv.trim().is_empty() && !app.entry.trim().is_empty() {
+            eprintln!(
+                "warning: app '{}' uses legacy venv/entry config; this is deprecated, prefer command=[...]",
+                app.name
+            );
+        }
+    }
     Ok(cfg)
 }
 
@@ -99,7 +113,7 @@ fn validate_config(cfg: &ConfigFile) -> Result<()> {
             }
             if app.entry.trim().is_empty() {
                 return Err(PyopsError::Config(format!(
-                    "app '{}' entry cannot be empty when command is not set",
+                    "app '{}' is missing command and legacy fields; set command=[\"python\",\"-m\",\"uvicorn\",\"app.main:app\"] or provide venv+entry",
                     app.name
                 )));
             }

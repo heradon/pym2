@@ -6,8 +6,8 @@ use crate::config::{
 use crate::error::{PyopsError, Result};
 use crate::ipc::client::IpcClient;
 use crate::model::{
-    AgentEvent, AppDetails, AppSpec, AppSummary, IpcRequest, LogSource, RestartPolicy,
-    StreamLogEvent,
+    effective_command, AgentEvent, AppDetails, AppSpec, AppSummary, IpcRequest, LogSource,
+    RestartPolicy, StreamLogEvent,
 };
 use crate::schedule::parse_restart_schedule;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -49,7 +49,7 @@ enum Commands {
         name: String,
         #[arg(long, default_value_t = 200)]
         tail: usize,
-        #[arg(long)]
+        #[arg(short = 'f', long)]
         follow: bool,
         #[arg(long, value_enum, default_value_t = CliLogSource::Both)]
         source: CliLogSource,
@@ -285,18 +285,14 @@ fn inspect(client: &IpcClient, name: String, as_json: bool) -> Result<()> {
         .clone();
     let app: AppDetails = serde_json::from_value(app_val)?;
 
-    let command = if app.spec.command.is_empty() {
-        format!("legacy:{} {}", app.spec.entry, app.spec.args.join(" "))
-    } else {
-        app.spec.command.join(" ")
-    };
+    let command = effective_command(&app.spec).join(" ");
     let reason = app
         .runtime
         .last_reason
         .clone()
         .or(app.runtime.last_error.clone())
         .unwrap_or_else(|| "-".to_string());
-    let signal = app.runtime.last_exit_signal.as_deref().unwrap_or("-");
+    let (stdout_log, stderr_log) = log_paths_for_app(&app.spec.name)?;
 
     println!("name: {}", app.spec.name);
     println!("status: {:?}", app.runtime.status);
@@ -311,6 +307,21 @@ fn inspect(client: &IpcClient, name: String, as_json: bool) -> Result<()> {
     println!("command: {}", command.trim());
     println!("env_file: {}", app.spec.env_file.as_deref().unwrap_or("-"));
     println!(
+        "last_start: {}",
+        app.runtime
+            .last_start_attempt_at
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    println!(
+        "last_exit: code={} signal={}",
+        app.runtime
+            .last_exit_code
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        app.runtime.last_exit_signal.as_deref().unwrap_or("-")
+    );
+    println!(
         "restart: {:?} | count: {} | next_schedule: {}",
         app.spec.restart,
         app.runtime.restart_count,
@@ -319,7 +330,9 @@ fn inspect(client: &IpcClient, name: String, as_json: bool) -> Result<()> {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "-".to_string())
     );
-    println!("reason: {} | signal: {}", reason, signal);
+    println!("reason: {}", reason);
+    println!("stdout_log: {}", stdout_log.display());
+    println!("stderr_log: {}", stderr_log.display());
     Ok(())
 }
 
@@ -332,7 +345,6 @@ fn print_status(mut apps: Vec<AppSummary>) {
             .clone()
             .or(app.runtime.last_error.clone())
             .unwrap_or_else(|| "-".to_string());
-        let signal = app.runtime.last_exit_signal.as_deref().unwrap_or("-");
         let cmd = if app.command.is_empty() {
             if app.entry.is_empty() {
                 "-".to_string()
@@ -344,7 +356,7 @@ fn print_status(mut apps: Vec<AppSummary>) {
         };
 
         println!(
-            "{} | {:?} | pid={} | restarts={} | reason={} | signal={} | {}",
+            "{} | {:?} | pid={} | restarts={} | reason={} | {}",
             app.name,
             app.runtime.status,
             app.runtime
@@ -353,7 +365,6 @@ fn print_status(mut apps: Vec<AppSummary>) {
                 .unwrap_or_else(|| "-".to_string()),
             app.runtime.restart_count,
             reason,
-            signal,
             cmd
         );
     }
@@ -478,8 +489,7 @@ fn add_cmd(
     autostart: bool,
     restart: RestartPolicy,
 ) -> Result<()> {
-    let parts = shell_words::split(&command)
-        .map_err(|e| PyopsError::Config(format!("invalid --command value: {}", e)))?;
+    let parts = parse_command_string(&command)?;
     if parts.is_empty() {
         return Err(PyopsError::Config(
             "--command must contain at least one executable".to_string(),
@@ -503,6 +513,11 @@ fn add_cmd(
     };
 
     add_app_to_config(app)
+}
+
+fn parse_command_string(command: &str) -> Result<Vec<String>> {
+    shell_words::split(command)
+        .map_err(|e| PyopsError::Config(format!("invalid --command value: {}", e)))
 }
 
 fn add_app_to_config(app: AppSpec) -> Result<()> {
@@ -539,9 +554,19 @@ fn add_app_to_config(app: AppSpec) -> Result<()> {
     }
 }
 
+fn log_paths_for_app(name: &str) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let cfg = load_config_or_defaults_for_client()?;
+    let state_dir = expand_tilde(&cfg.agent.state_dir)?;
+    let logs_dir = state_dir.join("logs");
+    Ok((
+        logs_dir.join(format!("{}.out.log", name)),
+        logs_dir.join(format!("{}.err.log", name)),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::build_fastapi_command;
+    use super::{build_fastapi_command, parse_command_string};
 
     #[test]
     fn build_fastapi_command_uses_venv_python() {
@@ -550,5 +575,19 @@ mod tests {
         assert_eq!(cmd[1], "-m");
         assert_eq!(cmd[2], "uvicorn");
         assert_eq!(cmd[3], "app.main:app");
+    }
+
+    #[test]
+    fn parse_command_string_handles_quotes() {
+        let parsed = parse_command_string("python -m http.server \"9000\"").expect("parse command");
+        assert_eq!(
+            parsed,
+            vec![
+                "python".to_string(),
+                "-m".to_string(),
+                "http.server".to_string(),
+                "9000".to_string()
+            ]
+        );
     }
 }

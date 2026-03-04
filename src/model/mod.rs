@@ -120,7 +120,7 @@ pub enum RestartPolicy {
 pub enum AppStatus {
     Running,
     Stopped,
-    Blocked,
+    #[serde(alias = "blocked")]
     Errored,
 }
 
@@ -276,4 +276,19 @@ pub enum AgentEventKind {
     ProcessStarted,
     ProcessStopped,
     ProcessErrored,
+}
+
+pub fn effective_command(spec: &AppSpec) -> Vec<String> {
+    if !spec.command.is_empty() {
+        return spec.command.clone();
+    }
+
+    let mut cmd = vec![
+        format!("{}/bin/python", spec.venv.trim_end_matches('/')),
+        "-m".to_string(),
+        "uvicorn".to_string(),
+        spec.entry.clone(),
+    ];
+    cmd.extend(spec.args.clone());
+    cmd
 }

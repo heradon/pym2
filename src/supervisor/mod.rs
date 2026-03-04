@@ -1,7 +1,7 @@
 use crate::error::{PyopsError, Result};
 use crate::model::{
-    AppDetails, AppRuntimeState, AppSpec, AppStatus, AppSummary, ConfigFile, LogSource,
-    RestartPolicy,
+    effective_command, AppDetails, AppRuntimeState, AppSpec, AppStatus, AppSummary, ConfigFile,
+    LogSource, RestartPolicy,
 };
 use crate::schedule::{next_occurrence, parse_restart_schedule, RestartSchedule};
 use std::collections::{HashMap, VecDeque};
@@ -94,7 +94,7 @@ impl Supervisor {
             .map(|app| AppSummary {
                 name: app.spec.name.clone(),
                 cwd: app.spec.cwd.clone(),
-                command: app.spec.command.clone(),
+                command: effective_command(&app.spec),
                 entry: app.spec.entry.clone(),
                 restart: app.spec.restart,
                 runtime: app.state.clone(),
@@ -204,7 +204,6 @@ impl Supervisor {
                                 needs_restart = Self::schedule_restart(app, now);
                             } else {
                                 app.state.status = AppStatus::Stopped;
-                                app.state.last_reason = Some("exit".to_string());
                             }
                             changed = true;
                         }
@@ -461,7 +460,7 @@ impl Supervisor {
             Some(pid) => pid,
             None => {
                 app.state.status = AppStatus::Stopped;
-                app.state.last_reason = Some("stopped".to_string());
+                app.state.last_reason = Some("manual_stop".to_string());
                 return Ok(());
             }
         };
@@ -477,7 +476,7 @@ impl Supervisor {
                     Ok(Some(status)) => {
                         Self::record_exit(app, status, unix_now());
                         app.state.status = AppStatus::Stopped;
-                        app.state.last_reason = Some("stopped".to_string());
+                        app.state.last_reason = Some("manual_stop".to_string());
                         app.consecutive_restarts = 0;
                         return Ok(());
                     }
@@ -494,7 +493,7 @@ impl Supervisor {
                 app.state.pid = None;
                 app.state.started_at = None;
                 app.state.backoff_until = None;
-                app.state.last_reason = Some("stopped".to_string());
+                app.state.last_reason = Some("manual_stop".to_string());
                 app.consecutive_restarts = 0;
                 if let Some(schedule) = app.schedule {
                     app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now());
@@ -518,7 +517,7 @@ impl Supervisor {
         app.state.pid = None;
         app.state.started_at = None;
         app.state.backoff_until = None;
-        app.state.last_reason = Some("stopped".to_string());
+        app.state.last_reason = Some("manual_stop".to_string());
         app.consecutive_restarts = 0;
         if let Some(schedule) = app.schedule {
             app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now());
@@ -539,6 +538,11 @@ impl Supervisor {
         app.state.started_at = None;
         app.state.last_exit_code = status.code();
         app.state.last_exit_signal = status.signal().map(signal_name);
+        app.state.last_reason = if let Some(sig) = status.signal() {
+            Some(format!("signal={}", signal_name(sig)))
+        } else {
+            Some(format!("exit_code={}", status.code().unwrap_or(1)))
+        };
     }
 
     fn is_failure(status: ExitStatus) -> bool {
@@ -566,7 +570,7 @@ impl Supervisor {
         app.state.restart_count = app.state.restart_count.saturating_add(1);
 
         if app.recent_restarts.len() > MAX_RESTARTS_IN_WINDOW {
-            app.state.status = AppStatus::Blocked;
+            app.state.status = AppStatus::Errored;
             app.state.last_error =
                 Some("crash loop protection triggered (>5 restarts in 60s)".to_string());
             app.state.last_reason = Some("max_restarts_exceeded".to_string());
@@ -578,7 +582,6 @@ impl Supervisor {
         let exp = app.consecutive_restarts.saturating_sub(1).min(31);
         let backoff = 2_u64.saturating_pow(exp).min(30);
         app.state.status = AppStatus::Stopped;
-        app.state.last_reason = Some("restart_policy".to_string());
         app.state.backoff_until = Some(unix_now().saturating_add(backoff));
         true
     }
@@ -865,7 +868,7 @@ mod tests {
             assert!(Supervisor::schedule_restart(&mut app, now));
         }
         assert!(!Supervisor::schedule_restart(&mut app, now));
-        assert_eq!(app.state.status, AppStatus::Blocked);
+        assert_eq!(app.state.status, AppStatus::Errored);
         assert_eq!(
             app.state.last_reason.as_deref(),
             Some("max_restarts_exceeded")
@@ -895,6 +898,7 @@ mod tests {
 
         assert_eq!(app.consecutive_restarts, 0);
         assert!(app.recent_restarts.is_empty());
+        assert_eq!(app.state.last_reason.as_deref(), Some("exit_code=1"));
     }
 
     #[test]
@@ -919,5 +923,6 @@ mod tests {
         Supervisor::record_exit(&mut app, status, 101);
 
         assert_eq!(app.state.last_exit_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(app.state.last_reason.as_deref(), Some("signal=SIGTERM"));
     }
 }
