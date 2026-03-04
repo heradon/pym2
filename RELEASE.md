@@ -42,4 +42,12 @@ git tag v1.2.0
 git push origin v1.2.0
 ```
 
-Tag workflow can publish release artifacts.
+## 6) Build release binary
+
+```bash
+cargo build --release
+```
+
+## 7) Package artifacts
+
+- Build and collect `.deb` / `.rpm` artifacts if packaging scripts are enabled.
