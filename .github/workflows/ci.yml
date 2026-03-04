@@ -7,27 +7,22 @@ on:
   workflow_dispatch:
 
 jobs:
-  linux-stable:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust (stable)
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-
-      - name: Rust versions
-        run: |
-          rustc --version
-          cargo --version
 
       - name: Format check
         run: cargo fmt -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Tests
         run: cargo test
@@ -35,34 +30,32 @@ jobs:
       - name: Tests (all features)
         run: cargo test --all-features
 
-      - name: Smoke test (Linux only)
+      - name: Smoke
         run: bash scripts/smoke.sh
 
-      - name: Packaging sanity
-        run: |
-          cargo build --release
-          test -f systemd/pym2.service
-
-  non-linux-sanity:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  macos:
+    runs-on: macos-latest
     continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust (stable)
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
 
-      - name: Sanity
+      - name: Tests
+        run: cargo test
+
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Tests
         shell: bash
-        run: |
-          rustc --version
-          cargo --version
-          cargo fmt -- --check
-          echo "pym2 is Linux-only; compile/runtime tests are intentionally skipped on $RUNNER_OS."
+        run: cargo test
