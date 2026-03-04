@@ -78,6 +78,14 @@ crash_limited() {
   echo "$j" | grep -q "\"status\":\"errored\"" && echo "$j" | grep -q "max_restarts_exceeded"
 }
 
+grace_exited() {
+  inspect_json grace | grep -q "exit_code=1"
+}
+
+grace_running() {
+  inspect_json grace | grep -q "\"status\":\"running\""
+}
+
 mkdir -p "$SMOKE_ROOT" "$SMOKE_ROOT/http" "$STATE_DIR"
 
 cat > "$CFG" <<CONFIG
@@ -113,9 +121,11 @@ wait_for 25 0.5 crash_limited || fail "crash app did not hit restart limiter"
 log "scenario C: grace reset"
 pym2_cmd add-cmd --name grace --cwd "$SMOKE_ROOT" --command "bash -lc 'sleep 12; exit 1'" --autostart false >/dev/null
 pym2_cmd start grace >/dev/null
-sleep 15
+for cycle in 1 2 3; do
+  wait_for 25 0.5 grace_exited || fail "grace app did not exit with code=1 in cycle $cycle"
+  wait_for 3 0.2 grace_running || fail "grace app restart backoff too large in cycle $cycle (grace reset likely broken)"
+done
 GRACE_JSON="$(inspect_json grace)"
-echo "$GRACE_JSON" | grep -q "exit_code=1" || fail "grace app missing exit_code reason"
 if echo "$GRACE_JSON" | grep -q "max_restarts_exceeded"; then
   fail "grace app unexpectedly hit crash limiter"
 fi
