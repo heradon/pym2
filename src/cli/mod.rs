@@ -82,7 +82,7 @@ enum Commands {
         env_file: Option<String>,
         #[arg(long)]
         restart_schedule: Option<String>,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         autostart: bool,
         #[arg(long, value_enum, default_value_t = CliRestartPolicy::OnFailure)]
         restart: CliRestartPolicy,
@@ -99,7 +99,7 @@ enum Commands {
         env_file: Option<String>,
         #[arg(long)]
         restart_schedule: Option<String>,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         autostart: bool,
         #[arg(long, value_enum, default_value_t = CliRestartPolicy::OnFailure)]
         restart: CliRestartPolicy,
