@@ -18,6 +18,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Format check
         run: cargo fmt -- --check
 
@@ -35,6 +38,7 @@ jobs:
 
   macos:
     runs-on: macos-latest
+    # best-effort non-Linux sanity
     continue-on-error: true
     steps:
       - name: Checkout
@@ -42,12 +46,16 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Tests
         run: cargo test
 
   windows:
     runs-on: windows-latest
+    # best-effort non-Linux sanity
     continue-on-error: true
     steps:
       - name: Checkout
@@ -56,6 +64,8 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Tests
-        shell: bash
         run: cargo test

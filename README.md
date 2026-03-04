@@ -1,217 +1,241 @@
+
 # pym2
 
-`pym2` is a Linux-only process manager for Python projects (PM2-like), focused on small binary size, performance, and robustness.
+[![CI](https://github.com/USER/pym2/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/pym2/actions)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-## Quickstart
+**pym2** is a lightweight Linux-first process manager for Python services.
+
+It is similar to **PM2**, but designed as a **small single binary** with minimal dependencies and a clean agent-based architecture.
+
+Ideal for:
+
+- FastAPI
+- Django
+- background workers
+- Python APIs
+- small self-hosted services
+
+---
+
+# Why pym2?
+
+Many Python services end up managed by either:
+
+- raw `systemd` units
+- heavy orchestrators
+- Node-based process managers
+
+`pym2` focuses on a simpler model.
+
+| Feature | pym2 | systemd | PM2 |
+|-------|------|------|------|
+| Single binary | ✅ | ❌ | ❌ |
+| Python-focused | ✅ | ❌ | ❌ |
+| CLI management | ✅ | ⚠️ | ✅ |
+| Crash protection | ✅ | ⚠️ | ✅ |
+| TUI interface | ✅ | ❌ | ⚠️ |
+| Web UI | ✅ | ❌ | ✅ |
+| Small footprint | ✅ | ⚠️ | ❌ |
+
+---
+
+# Quickstart
+
+Start the agent:
+
+```bash
+pym2 agent
+```
+
+Add an application:
 
 ```bash
 pym2 add-fastapi --name api --cwd /srv/api --entry app:app
+```
+
+Start it:
+
+```bash
 pym2 start api
 pym2 status
 ```
 
-## Features
+---
 
-- Agent/daemon mode with Unix Domain Socket IPC
-- CLI control (`start`, `stop`, `restart`, `status`, `logs`, `events`)
-- TUI mode (`pym2 tui`) with keybindings
-- Optional built-in Web UI (`agent.web` config)
-- TOML config, JSON IPC
-- Generic process supervision via `command[]` (with legacy `venv + uvicorn` fallback)
-- Restart policies with backoff and crash-loop protection
-- System packaging support for `.deb` and `.rpm`
-
-## Runtime paths (system defaults)
-
-- Config: `/etc/pym2/config.toml`
-- Socket: `/run/pym2/pym2.sock`
-- State + logs: `/var/lib/pym2` and `/var/lib/pym2/logs`
-
-## Optional Web UI
-
-The web UI is built into the agent and disabled by default.
+# Example
 
 ```toml
-[agent.web]
-enabled = false
-host = "127.0.0.1"
-port = 17877
-# password = "change-me"
+[[apps]]
+name = "api"
+cwd = "/srv/api"
+
+command = [
+  "python",
+  "-m",
+  "uvicorn",
+  "app.main:app",
+  "--host","0.0.0.0",
+  "--port","8000"
+]
+
+env_file = "/srv/api/.env"
+restart = "on-failure"
+autostart = true
 ```
 
-- `enabled`: turns web UI on/off
-- `host`: bind address (`127.0.0.1` or `0.0.0.0`)
-- `port`: HTTP port
-- `password`: optional on loopback; required when `enabled=true` and host is non-loopback
-
-Security defaults:
-- bind defaults to `127.0.0.1`
-- non-loopback bind requires `password`
-- prefer reverse proxy + TLS for any remote access
-- send auth as `Authorization: Bearer <password>` or `X-Pym2-Password: <password>`
-- startup is refused without token on public bind: `Refusing to bind Web UI to public interface without auth token.`
-
-## Build
-
-```bash
-cargo build --release
-# Default binary is minimal (no TUI, no Web UI)
-
-# Enable TUI support
-cargo build --release --features tui
-
-# Enable Web UI build support
-cargo build --release --features webui
-
-# Enable both
-cargo build --release --features tui,webui
-```
-
-## Run
-
-```bash
-# Agent
-pym2 agent
+---
 
 # CLI
-pym2 start <name|all>
-pym2 stop <name|all>
-pym2 restart <name|all>
-pym2 status [--json]
-pym2 inspect <name> [--json]
-pym2 logs <name> -f
+
+Lifecycle:
+
+```bash
+pym2 start <app>
+pym2 stop <app>
+pym2 restart <app>
+pym2 status
+pym2 inspect <app>
+```
+
+Logs:
+
+```bash
+pym2 logs <app> -f
 pym2 events --follow
+```
+
+Diagnostics:
+
+```bash
 pym2 ping
 pym2 doctor
 pym2 config lint
-
-# TUI
-pym2 tui
-
-# Add apps (writes /etc/pym2/config.toml)
-pym2 add-fastapi --name api --cwd /srv/api --entry app.main:app --venv .venv --host 0.0.0.0 --port 8000 --restart-schedule "daily@03:00"
-pym2 add-cmd --name worker --cwd /srv/worker --command "python worker.py --queue default"
 ```
 
-Note: `add-fastapi` and `add-cmd` write to `/etc/pym2/config.toml`, so run them with enough permissions.
-`add-fastapi` uses `--venv` to build the command (`<venv>/bin/python -m uvicorn ...`).
-
-## Example config
-
-```toml
-[agent]
-socket = "/run/pym2/pym2.sock"
-state_dir = "/var/lib/pym2"
-
-[[apps]]
-name = "api"
-cwd = "/srv/api"
-command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-env_file = "/srv/api/.env"
-autostart = true
-restart = "on-failure"
-stop_signal = "SIGTERM"
-kill_timeout_ms = 8000
-restart_schedule = "daily@03:00"
-env = { PYTHONUNBUFFERED = "1" }
-```
-
-Legacy mode is still supported if `command` is empty:
-- set `venv`, `entry`, and optional `args`
-- this mode is deprecated; prefer `command[]` for new apps
-
-## Migration (legacy -> command)
-
-Old (legacy):
-
-```toml
-[[apps]]
-name = "api"
-cwd = "/srv/api"
-venv = ".venv"
-entry = "app.main:app"
-args = ["--host", "0.0.0.0", "--port", "8000"]
-```
-
-New (recommended):
-
-```toml
-[[apps]]
-name = "api"
-cwd = "/srv/api"
-command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-`restart_schedule` supports:
-- `daily@HH:MM` (example: `daily@03:00`)
-- `weekly@sun HH:MM` (example: `weekly@sun 03:00`)
-
-Crash-loop protection default:
-- more than `5` restarts in `60` seconds -> app status `Errored` with reason `max_restarts_exceeded`
-- if a service restarts too often in a short window, pym2 stops restarting it and reports an error reason
-
-## Install
-
-- Debian/Ubuntu: build and install `.deb` via `./scripts/build-deb.sh --arch amd64` (or `arm64`)
-- Fedora/CentOS/RHEL/Rocky: build and install `.rpm` via `./scripts/build-rpm.sh --arch x86_64` (or `aarch64`)
-- Manual binary install:
-  - copy binary to `/usr/bin/pym2`
-  - install `systemd/pym2.service` to `/etc/systemd/system/pym2.service`
-
-Systemd quickstart:
+Interactive mode:
 
 ```bash
+pym2 tui
+```
+
+---
+
+# Web UI (optional)
+
+Enable in config:
+
+```toml
+[agent.web]
+enabled = true
+host = "127.0.0.1"
+port = 17877
+password = "change-me"
+```
+
+Security rules:
+
+- localhost by default
+- public bind requires password
+- recommended behind reverse proxy + TLS
+
+---
+
+# Crash Protection
+
+pym2 protects services from restart storms.
+
+Defaults:
+
+| Setting | Value |
+|------|------|
+Restart window | 60 seconds |
+Max restarts | 5 |
+Grace reset | 10 seconds |
+
+If exceeded:
+
+status: Errored
+reason: max_restarts_exceeded
+
+---
+
+# Runtime Paths
+
+| Path | Purpose |
+|-----|-----|
+`/etc/pym2/config.toml` | configuration |
+`/run/pym2/pym2.sock` | agent socket |
+`/var/lib/pym2` | runtime state |
+`/var/lib/pym2/logs` | logs |
+
+---
+
+# Build
+
+Minimal build:
+
+cargo build --release
+
+With TUI:
+
+cargo build --release --features tui
+
+With Web UI:
+
+cargo build --release --features webui
+
+---
+
+# Installation
+
+Manual:
+
+sudo install -m755 pym2 /usr/bin/pym2
+
+Systemd:
+
+sudo cp systemd/pym2.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pym2
-sudo systemctl status pym2
-```
 
-## Uninstall
+---
 
-```bash
-sudo systemctl disable --now pym2 || true
-sudo rm -f /etc/systemd/system/pym2.service
-sudo systemctl daemon-reload
-sudo rm -f /usr/bin/pym2
-sudo rm -rf /run/pym2 /var/lib/pym2
-sudo rm -rf /etc/pym2
-```
+# Packaging
 
-## Packaging
+Debian:
 
-Shared metadata:
-
-- `packaging/build-metadata.env`
-- `systemd/pym2.service` (installed by deb/rpm packages)
-
-Debian package:
-
-```bash
 ./scripts/build-deb.sh --arch amd64
-./scripts/build-deb.sh --arch arm64
-```
 
-RPM package:
+RPM:
 
-```bash
 ./scripts/build-rpm.sh --arch x86_64
-./scripts/build-rpm.sh --arch aarch64
-```
 
-Useful flags for both scripts:
+---
 
-- `--no-enable-service`
-- `--no-systemd`
-- `--no-default-features`
-- `--features tui,webui` (or any subset)
+# Architecture
 
-## License and attribution
+High level:
 
-This project is licensed under **AGPL-3.0-or-later**.
+CLI
+ │
+ │ IPC (Unix socket)
+ ▼
+Agent
+ │
+ ▼
+Supervisor
+ │
+ ▼
+Managed Processes
 
-If you use `pym2` in production, a simple technical attribution like the
-following is appreciated and fully fine:
+See:
 
-- `curl`
-- `python`
-- `pym2`
+docs/ARCHITECTURE.md
+docs/DEV_RULES.md
+
+---
+
+# License
+
+AGPL-3.0-or-later

@@ -10,6 +10,7 @@ STATE_DIR="$SMOKE_ROOT/state"
 AGENT_LOG="$SMOKE_ROOT/agent.log"
 AGENT_PID=""
 SMOKE_OK=0
+HTTP_PORT=$((8099 + ($$ % 1000)))
 
 log() { printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -27,6 +28,11 @@ cleanup() {
   if [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null; then
     kill "$AGENT_PID" 2>/dev/null || true
     wait "$AGENT_PID" 2>/dev/null || true
+    if kill -0 "$AGENT_PID" 2>/dev/null; then
+      kill -TERM -"$AGENT_PID" 2>/dev/null || true
+      sleep 0.2
+      kill -KILL -"$AGENT_PID" 2>/dev/null || true
+    fi
   fi
   if [[ "$SMOKE_OK" -eq 1 ]]; then
     rm -rf "$SMOKE_ROOT"
@@ -105,6 +111,9 @@ grace_running() {
 
 mkdir -p "$SMOKE_ROOT" "$SMOKE_ROOT/http" "$STATE_DIR"
 
+command -v curl >/dev/null || fail "curl is required for smoke test"
+command -v python >/dev/null || fail "python is required for smoke test"
+
 cat > "$CFG" <<CONFIG
 [agent]
 socket = "$SOCK"
@@ -120,11 +129,11 @@ log "starting agent"
 start_agent
 
 log "scenario A: basic command"
-pym2_cmd add-cmd --name http --cwd "$SMOKE_ROOT/http" --command "python -m http.server 8099" --restart never --autostart false
+pym2_cmd add-cmd --name http --cwd "$SMOKE_ROOT/http" --command "python -m http.server $HTTP_PORT" --restart never --autostart false
 restart_agent
 pym2_cmd start http >/dev/null
 wait_for 15 0.5 http_running || fail "http app did not become running"
-curl -fsS http://127.0.0.1:8099 >/dev/null || fail "http endpoint not reachable"
+curl -fsS "http://127.0.0.1:$HTTP_PORT" >/dev/null || fail "http endpoint not reachable"
 pym2_cmd stop http >/dev/null
 wait_for 10 0.5 http_stopped || fail "http app did not stop"
 
