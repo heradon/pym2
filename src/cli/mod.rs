@@ -314,6 +314,13 @@ fn inspect(client: &IpcClient, name: String, as_json: bool) -> Result<()> {
             .unwrap_or_else(|| "-".to_string())
     );
     println!(
+        "started_at: {}",
+        app.runtime
+            .started_at
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    println!(
         "last_exit: code={} signal={}",
         app.runtime
             .last_exit_code

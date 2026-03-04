@@ -753,6 +753,7 @@ fn unix_now() -> u64 {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::process::ExitStatusExt;
 
     fn base_spec() -> AppSpec {
         AppSpec {
@@ -889,11 +890,7 @@ mod tests {
             consecutive_restarts: 3,
         };
 
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg("exit 1")
-            .status()
-            .expect("status");
+        let status = std::process::ExitStatus::from_raw(1 << 8);
         Supervisor::record_exit(&mut app, status, 100 + SUCCESS_AFTER_SECS);
 
         assert_eq!(app.consecutive_restarts, 0);
@@ -915,11 +912,7 @@ mod tests {
             consecutive_restarts: 0,
         };
 
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg("kill -TERM $$")
-            .status()
-            .expect("status");
+        let status = std::process::ExitStatus::from_raw(libc::SIGTERM);
         Supervisor::record_exit(&mut app, status, 101);
 
         assert_eq!(app.state.last_exit_signal.as_deref(), Some("SIGTERM"));

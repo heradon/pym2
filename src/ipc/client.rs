@@ -19,7 +19,7 @@ impl IpcClient {
     pub fn request(&self, req: IpcRequest) -> Result<IpcResponse> {
         let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| {
             PyopsError::Ipc(format!(
-                "failed to connect to agent socket {}: {}",
+                "failed to connect to agent socket {}: {} (is 'pym2 agent' running?)",
                 self.socket_path.display(),
                 e
             ))
