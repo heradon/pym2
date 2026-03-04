@@ -1,17 +1,22 @@
 use crate::error::{PyopsError, Result};
 use crate::model::{
-    AppDetails, AppRuntimeState, AppSpec, AppStatus, AppSummary, ConfigFile, LogSource,
-    RestartPolicy,
+    effective_command, AppDetails, AppRuntimeState, AppSpec, AppStatus, AppSummary, ConfigFile,
+    LogSource, RestartPolicy,
 };
 use crate::schedule::{next_occurrence, parse_restart_schedule, RestartSchedule};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const SUCCESS_AFTER_SECS: u64 = 10;
+const RESTART_WINDOW_SECS: u64 = 60;
+const MAX_RESTARTS_IN_WINDOW: usize = 5;
 
 struct ManagedApp {
     spec: AppSpec,
@@ -24,7 +29,13 @@ struct ManagedApp {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct PersistedRuntimeState {
+    #[serde(default = "default_runtime_schema_version")]
+    schema_version: u32,
     apps: HashMap<String, AppRuntimeState>,
+}
+
+fn default_runtime_schema_version() -> u32 {
+    1
 }
 
 pub struct Supervisor {
@@ -83,6 +94,7 @@ impl Supervisor {
             .map(|app| AppSummary {
                 name: app.spec.name.clone(),
                 cwd: app.spec.cwd.clone(),
+                command: effective_command(&app.spec),
                 entry: app.spec.entry.clone(),
                 restart: app.spec.restart,
                 runtime: app.state.clone(),
@@ -186,7 +198,7 @@ impl Supervisor {
                 if let Some(child) = app.child.as_mut() {
                     match child.try_wait() {
                         Ok(Some(status)) => {
-                            Self::record_exit(app, status);
+                            Self::record_exit(app, status, now_epoch);
                             let failure = Self::is_failure(status);
                             if Self::should_restart(app.spec.restart, failure) {
                                 needs_restart = Self::schedule_restart(app, now);
@@ -199,6 +211,7 @@ impl Supervisor {
                         Err(err) => {
                             app.state.status = AppStatus::Errored;
                             app.state.last_error = Some(format!("try_wait failed: {}", err));
+                            app.state.last_reason = Some("try_wait_failed".to_string());
                             app.child = None;
                             app.state.pid = None;
                             changed = true;
@@ -213,6 +226,7 @@ impl Supervisor {
                                 app.state.status = AppStatus::Stopped;
                                 app.state.pid = None;
                                 app.state.started_at = None;
+                                app.state.last_reason = Some("pid_not_alive".to_string());
                                 changed = true;
                             }
                         }
@@ -235,10 +249,11 @@ impl Supervisor {
             }
 
             if scheduled_restart_due {
-                if scheduled_restart_allowed {
-                    if self.stop_one(&name).is_ok() && self.start_one(&name).is_ok() {
-                        changed = true;
-                    }
+                if scheduled_restart_allowed
+                    && self.stop_one(&name).is_ok()
+                    && self.start_one(&name).is_ok()
+                {
+                    changed = true;
                 }
                 self.refresh_schedule_target_for(&name, unix_now());
             }
@@ -305,10 +320,11 @@ impl Supervisor {
 
     fn persist_runtime_state(&self) -> Result<()> {
         let snapshot = PersistedRuntimeState {
+            schema_version: default_runtime_schema_version(),
             apps: self.runtime_snapshot(),
         };
         let payload = serde_json::to_vec_pretty(&snapshot)?;
-        fs::write(self.runtime_state_path(), payload)?;
+        write_atomic(&self.runtime_state_path(), &payload)?;
         Ok(())
     }
 
@@ -320,6 +336,13 @@ impl Supervisor {
 
         let payload = fs::read(&path)?;
         let persisted: PersistedRuntimeState = serde_json::from_slice(&payload)?;
+        if persisted.schema_version != default_runtime_schema_version() {
+            return Err(PyopsError::Supervisor(format!(
+                "unsupported runtime_state schema_version {}, expected {}",
+                persisted.schema_version,
+                default_runtime_schema_version()
+            )));
+        }
 
         for (name, state) in persisted.apps {
             if let Some(app) = self.apps.get_mut(&name) {
@@ -361,14 +384,7 @@ impl Supervisor {
         }
 
         let cwd = PathBuf::from(&app.spec.cwd);
-        let venv = if Path::new(&app.spec.venv).is_absolute() {
-            PathBuf::from(&app.spec.venv)
-        } else {
-            cwd.join(&app.spec.venv)
-        };
-
-        let uvicorn = venv.join("bin/uvicorn");
-        let python = venv.join("bin/python");
+        let (exec, args) = build_command(&app.spec)?;
 
         let stdout_path = self.logs_dir.join(format!("{}.out.log", app.spec.name));
         let stderr_path = self.logs_dir.join(format!("{}.err.log", app.spec.name));
@@ -386,22 +402,14 @@ impl Supervisor {
             .append(true)
             .open(stderr_path)?;
 
-        let mut cmd = if uvicorn.exists() {
-            let mut c = Command::new(uvicorn);
-            c.arg(&app.spec.entry);
-            c
-        } else {
-            let mut c = Command::new(python);
-            c.arg("-m").arg("uvicorn").arg(&app.spec.entry);
-            c
-        };
-
-        cmd.args(&app.spec.args)
+        let mut cmd = Command::new(exec);
+        cmd.args(args)
             .current_dir(&cwd)
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
 
-        for (k, v) in &app.spec.env {
+        let env_map = build_app_env(&app.spec, &cwd)?;
+        for (k, v) in env_map {
             cmd.env(k, v);
         }
 
@@ -423,6 +431,7 @@ impl Supervisor {
                 app.state.pid = Some(child.id());
                 app.state.started_at = Some(unix_now());
                 app.state.last_error = None;
+                app.state.last_reason = Some("running".to_string());
                 app.child = Some(child);
                 if let Some(schedule) = app.schedule {
                     app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now())
@@ -433,6 +442,7 @@ impl Supervisor {
             Err(err) => {
                 app.state.status = AppStatus::Errored;
                 app.state.last_error = Some(format!("spawn failed: {}", err));
+                app.state.last_reason = Some("spawn_failed".to_string());
                 Err(PyopsError::Supervisor(format!(
                     "failed to start '{}': {}",
                     app.spec.name, err
@@ -451,6 +461,7 @@ impl Supervisor {
             Some(pid) => pid,
             None => {
                 app.state.status = AppStatus::Stopped;
+                app.state.last_reason = Some("manual_stop".to_string());
                 return Ok(());
             }
         };
@@ -464,8 +475,9 @@ impl Supervisor {
             if let Some(child) = app.child.as_mut() {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        Self::record_exit(app, status);
+                        Self::record_exit(app, status, unix_now());
                         app.state.status = AppStatus::Stopped;
+                        app.state.last_reason = Some("manual_stop".to_string());
                         app.consecutive_restarts = 0;
                         return Ok(());
                     }
@@ -482,6 +494,7 @@ impl Supervisor {
                 app.state.pid = None;
                 app.state.started_at = None;
                 app.state.backoff_until = None;
+                app.state.last_reason = Some("manual_stop".to_string());
                 app.consecutive_restarts = 0;
                 if let Some(schedule) = app.schedule {
                     app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now());
@@ -505,6 +518,7 @@ impl Supervisor {
         app.state.pid = None;
         app.state.started_at = None;
         app.state.backoff_until = None;
+        app.state.last_reason = Some("manual_stop".to_string());
         app.consecutive_restarts = 0;
         if let Some(schedule) = app.schedule {
             app.state.next_scheduled_restart_at = next_occurrence(schedule, unix_now());
@@ -512,11 +526,24 @@ impl Supervisor {
         Ok(())
     }
 
-    fn record_exit(app: &mut ManagedApp, status: ExitStatus) {
+    fn record_exit(app: &mut ManagedApp, status: ExitStatus, now_epoch: u64) {
+        if let Some(started_at) = app.state.started_at {
+            let runtime_secs = now_epoch.saturating_sub(started_at);
+            if runtime_secs >= SUCCESS_AFTER_SECS {
+                app.consecutive_restarts = 0;
+                app.recent_restarts.clear();
+            }
+        }
         app.child = None;
         app.state.pid = None;
         app.state.started_at = None;
         app.state.last_exit_code = status.code();
+        app.state.last_exit_signal = status.signal().map(signal_name);
+        app.state.last_reason = if let Some(sig) = status.signal() {
+            Some(format!("signal={}", signal_name(sig)))
+        } else {
+            Some(format!("exit_code={}", status.code().unwrap_or(1)))
+        };
     }
 
     fn is_failure(status: ExitStatus) -> bool {
@@ -533,7 +560,7 @@ impl Supervisor {
 
     fn schedule_restart(app: &mut ManagedApp, now: Instant) -> bool {
         while let Some(front) = app.recent_restarts.front() {
-            if now.duration_since(*front) > Duration::from_secs(300) {
+            if now.duration_since(*front) > Duration::from_secs(RESTART_WINDOW_SECS) {
                 app.recent_restarts.pop_front();
             } else {
                 break;
@@ -543,10 +570,11 @@ impl Supervisor {
         app.recent_restarts.push_back(now);
         app.state.restart_count = app.state.restart_count.saturating_add(1);
 
-        if app.recent_restarts.len() > 10 {
+        if app.recent_restarts.len() > MAX_RESTARTS_IN_WINDOW {
             app.state.status = AppStatus::Errored;
             app.state.last_error =
-                Some("crash loop protection triggered (>10 restarts in 5m)".to_string());
+                Some("crash loop protection triggered (>5 restarts in 60s)".to_string());
+            app.state.last_reason = Some("max_restarts_exceeded".to_string());
             app.state.backoff_until = None;
             return false;
         }
@@ -592,6 +620,80 @@ impl Supervisor {
     }
 }
 
+fn build_command(app: &AppSpec) -> Result<(PathBuf, Vec<String>)> {
+    if !app.command.is_empty() {
+        let exec = PathBuf::from(&app.command[0]);
+        let args = app.command[1..].to_vec();
+        return Ok((exec, args));
+    }
+
+    let cwd = PathBuf::from(&app.cwd);
+    let venv = if Path::new(&app.venv).is_absolute() {
+        PathBuf::from(&app.venv)
+    } else {
+        cwd.join(&app.venv)
+    };
+    let uvicorn = venv.join("bin/uvicorn");
+    if uvicorn.exists() {
+        let mut args = vec![app.entry.clone()];
+        args.extend(app.args.clone());
+        return Ok((uvicorn, args));
+    }
+
+    let python = venv.join("bin/python");
+    let mut args = vec!["-m".to_string(), "uvicorn".to_string(), app.entry.clone()];
+    args.extend(app.args.clone());
+    Ok((python, args))
+}
+
+fn load_env_file(path: &Path) -> Result<HashMap<String, String>> {
+    let payload = fs::read_to_string(path)?;
+    let mut env = HashMap::new();
+
+    for line in payload.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        env.insert(key.to_string(), value.trim().to_string());
+    }
+
+    Ok(env)
+}
+
+fn build_app_env(app: &AppSpec, cwd: &Path) -> Result<HashMap<String, String>> {
+    let mut env_map = HashMap::new();
+    if let Some(env_file) = app.env_file.as_ref() {
+        let env_path = if Path::new(env_file).is_absolute() {
+            PathBuf::from(env_file)
+        } else {
+            cwd.join(env_file)
+        };
+        env_map.extend(load_env_file(&env_path)?);
+    }
+    for (k, v) in &app.env {
+        env_map.insert(k.clone(), v.clone());
+    }
+    Ok(env_map)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 fn send_signal_to_group(pid: i32, signal: i32) -> Result<()> {
     let rc = unsafe { libc::kill(-pid, signal) };
     if rc == -1 {
@@ -618,6 +720,19 @@ fn signal_from_name(name: &str) -> Option<i32> {
     }
 }
 
+fn signal_name(sig: i32) -> String {
+    match sig {
+        libc::SIGTERM => "SIGTERM".to_string(),
+        libc::SIGINT => "SIGINT".to_string(),
+        libc::SIGQUIT => "SIGQUIT".to_string(),
+        libc::SIGHUP => "SIGHUP".to_string(),
+        libc::SIGKILL => "SIGKILL".to_string(),
+        libc::SIGSEGV => "SIGSEGV".to_string(),
+        libc::SIGABRT => "SIGABRT".to_string(),
+        _ => format!("SIG{}", sig),
+    }
+}
+
 fn is_pid_alive(pid: i32) -> bool {
     let rc = unsafe { libc::kill(pid, 0) };
     if rc == 0 {
@@ -633,4 +748,175 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::process::ExitStatusExt;
+
+    fn base_spec() -> AppSpec {
+        AppSpec {
+            name: "api".to_string(),
+            cwd: "/tmp".to_string(),
+            command: Vec::new(),
+            venv: ".venv".to_string(),
+            entry: "app.main:app".to_string(),
+            args: vec!["--port".to_string(), "8000".to_string()],
+            autostart: true,
+            restart: RestartPolicy::OnFailure,
+            stop_signal: "SIGTERM".to_string(),
+            kill_timeout_ms: 8000,
+            restart_schedule: None,
+            env_file: None,
+            env: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn build_command_uses_command_mode_when_present() {
+        let mut spec = base_spec();
+        spec.command = vec![
+            "python".to_string(),
+            "-m".to_string(),
+            "http.server".to_string(),
+            "9000".to_string(),
+        ];
+        let (exec, args) = build_command(&spec).expect("build command");
+        assert_eq!(exec, PathBuf::from("python"));
+        assert_eq!(args, vec!["-m", "http.server", "9000"]);
+    }
+
+    #[test]
+    fn build_command_uses_legacy_python_fallback() {
+        let mut spec = base_spec();
+        let unique = format!("pym2-supervisor-test-{}", std::process::id());
+        let root = std::env::temp_dir().join(unique);
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".venv/bin")).expect("create dir");
+
+        spec.cwd = root.to_str().expect("temp path to utf8").to_string();
+        let (exec, args) = build_command(&spec).expect("build command");
+
+        assert_eq!(exec, root.join(".venv/bin/python"));
+        assert_eq!(
+            args,
+            vec![
+                "-m".to_string(),
+                "uvicorn".to_string(),
+                "app.main:app".to_string(),
+                "--port".to_string(),
+                "8000".to_string()
+            ]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_env_file_parses_simple_lines() {
+        let unique = format!("pym2-env-test-{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("{}.env", unique));
+        fs::write(
+            &path,
+            "# comment\nA=1\nB =  two \ninvalid\n =skip\nEMPTY=\n",
+        )
+        .expect("write env file");
+
+        let env = load_env_file(&path).expect("parse env file");
+        assert_eq!(env.get("A").map(String::as_str), Some("1"));
+        assert_eq!(env.get("B").map(String::as_str), Some("two"));
+        assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
+        assert!(!env.contains_key("invalid"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn build_app_env_prefers_inline_env_over_env_file() {
+        let mut spec = base_spec();
+        let unique = format!("pym2-env-merge-test-{}", std::process::id());
+        let cwd = std::env::temp_dir().join(unique);
+        let _ = fs::remove_dir_all(&cwd);
+        fs::create_dir_all(&cwd).expect("create dir");
+
+        let env_path = cwd.join("app.env");
+        fs::write(&env_path, "A=file\nB=file\n").expect("write env file");
+
+        spec.env_file = Some("app.env".to_string());
+        spec.env.insert("B".to_string(), "inline".to_string());
+        spec.env.insert("C".to_string(), "inline".to_string());
+
+        let merged = build_app_env(&spec, &cwd).expect("merge env");
+        assert_eq!(merged.get("A").map(String::as_str), Some("file"));
+        assert_eq!(merged.get("B").map(String::as_str), Some("inline"));
+        assert_eq!(merged.get("C").map(String::as_str), Some("inline"));
+
+        let _ = fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn schedule_restart_blocks_after_limit() {
+        let mut app = ManagedApp {
+            spec: base_spec(),
+            schedule: None,
+            state: AppRuntimeState::default(),
+            child: None,
+            recent_restarts: VecDeque::new(),
+            consecutive_restarts: 0,
+        };
+
+        let now = Instant::now();
+        for _ in 0..MAX_RESTARTS_IN_WINDOW {
+            assert!(Supervisor::schedule_restart(&mut app, now));
+        }
+        assert!(!Supervisor::schedule_restart(&mut app, now));
+        assert_eq!(app.state.status, AppStatus::Errored);
+        assert_eq!(
+            app.state.last_reason.as_deref(),
+            Some("max_restarts_exceeded")
+        );
+    }
+
+    #[test]
+    fn record_exit_resets_restart_counters_after_success_grace() {
+        let mut app = ManagedApp {
+            spec: base_spec(),
+            schedule: None,
+            state: AppRuntimeState {
+                started_at: Some(100),
+                ..AppRuntimeState::default()
+            },
+            child: None,
+            recent_restarts: VecDeque::from([Instant::now()]),
+            consecutive_restarts: 3,
+        };
+
+        let status = std::process::ExitStatus::from_raw(1 << 8);
+        Supervisor::record_exit(&mut app, status, 100 + SUCCESS_AFTER_SECS);
+
+        assert_eq!(app.consecutive_restarts, 0);
+        assert!(app.recent_restarts.is_empty());
+        assert_eq!(app.state.last_reason.as_deref(), Some("exit_code=1"));
+    }
+
+    #[test]
+    fn record_exit_sets_last_exit_signal() {
+        let mut app = ManagedApp {
+            spec: base_spec(),
+            schedule: None,
+            state: AppRuntimeState {
+                started_at: Some(100),
+                ..AppRuntimeState::default()
+            },
+            child: None,
+            recent_restarts: VecDeque::new(),
+            consecutive_restarts: 0,
+        };
+
+        let status = std::process::ExitStatus::from_raw(libc::SIGTERM);
+        Supervisor::record_exit(&mut app, status, 101);
+
+        assert_eq!(app.state.last_exit_signal.as_deref(), Some("SIGTERM"));
+        assert_eq!(app.state.last_reason.as_deref(), Some("signal=SIGTERM"));
+    }
 }

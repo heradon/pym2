@@ -1,8 +1,13 @@
 [package]
 name = "pym2"
-version = "0.1.0"
+version = "1.2.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+
+[features]
+default = []
+tui = []
+webui = []
 
 [profile.release]
 lto = true
@@ -17,3 +22,4 @@ serde_json = "1.0"
 toml = "0.8"
 thiserror = "2.0"
 libc = "0.2"
+shell-words = "1.1"

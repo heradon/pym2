@@ -2,7 +2,7 @@ name: Build Packages
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "next/**"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -11,8 +11,44 @@ permissions:
   contents: write
 
 jobs:
+  qa:
+    name: qa (minimal + full features)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+          . "$HOME/.cargo/env"
+          rustup component add clippy
+          rustc --version
+          cargo --version
+
+      - name: Test (minimal/default features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo test --locked
+
+      - name: Test (all features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo test --locked --all-features
+
+      - name: Clippy (minimal/default features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Clippy (all features)
+        run: |
+          . "$HOME/.cargo/env"
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+
   deb:
     name: deb (${{ matrix.distro }}-${{ matrix.arch }})
+    needs: qa
     runs-on: ${{ matrix.runs_on }}
     container:
       image: ${{ matrix.image }}
@@ -75,6 +111,7 @@ jobs:
 
   rpm:
     name: rpm (${{ matrix.distro }}-${{ matrix.arch }})
+    needs: qa
     runs-on: ${{ matrix.runs_on }}
     container:
       image: ${{ matrix.image }}

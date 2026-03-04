@@ -1,3 +1,4 @@
+#[cfg(feature = "webui")]
 mod web;
 
 use crate::config::{ensure_state_dirs, load_config};
@@ -45,6 +46,12 @@ pub fn run_agent() -> Result<()> {
     listener.set_nonblocking(true)?;
 
     let web_cfg = cfg.agent.web.clone();
+    if web_cfg.enabled && !is_loopback_host(web_cfg.host.trim()) {
+        eprintln!(
+            "warning: web ui is bound to non-loopback address {}:{}; do not expose directly to the internet (use reverse proxy + TLS)",
+            web_cfg.host, web_cfg.port
+        );
+    }
     let (state_dir, _, logs_dir) = ensure_state_dirs(&cfg)?;
     let mut supervisor = Supervisor::new(cfg, state_dir, logs_dir);
     supervisor.start_autostart();
@@ -53,9 +60,17 @@ pub fn run_agent() -> Result<()> {
     let events = Arc::new(Mutex::new(EventBus::default()));
     let active_clients = Arc::new(AtomicUsize::new(0));
 
+    #[cfg(feature = "webui")]
     let web_thread = if web_cfg.enabled {
         Some(web::spawn_server(web_cfg, Arc::clone(&supervisor)))
     } else {
+        None
+    };
+    #[cfg(not(feature = "webui"))]
+    let web_thread: Option<thread::JoinHandle<()>> = {
+        if web_cfg.enabled {
+            eprintln!("web ui enabled in config but binary was built without 'webui' feature");
+        }
         None
     };
 
@@ -120,6 +135,7 @@ pub fn run_agent() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(not(feature = "webui"), allow(dead_code))]
 pub(crate) fn should_stop() -> bool {
     SHOULD_STOP.load(Ordering::SeqCst)
 }
@@ -165,6 +181,10 @@ fn dispatch(
     let before = sup.runtime_snapshot();
 
     let resp = match req {
+        IpcRequest::Ping => IpcResponse::ok(json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "pid": std::process::id()
+        })),
         IpcRequest::Start { name } => match sup.start(&name) {
             Ok(started) => IpcResponse::ok(json!({ "started": started })),
             Err(err) => IpcResponse::err(err.to_string()),
@@ -207,6 +227,10 @@ fn dispatch(
     }
 
     Ok(resp)
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
 fn watch_events(

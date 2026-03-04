@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigFile {
@@ -72,6 +73,8 @@ fn default_web_port() -> u16 {
 pub struct AppSpec {
     pub name: String,
     pub cwd: String,
+    #[serde(default)]
+    pub command: Vec<String>,
     pub venv: String,
     pub entry: String,
     #[serde(default)]
@@ -86,6 +89,8 @@ pub struct AppSpec {
     pub kill_timeout_ms: u64,
     #[serde(default)]
     pub restart_schedule: Option<String>,
+    #[serde(default)]
+    pub env_file: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
 }
@@ -116,6 +121,7 @@ pub enum RestartPolicy {
 pub enum AppStatus {
     Running,
     Stopped,
+    #[serde(alias = "blocked")]
     Errored,
 }
 
@@ -126,7 +132,9 @@ pub struct AppRuntimeState {
     pub started_at: Option<u64>,
     pub restart_count: u32,
     pub last_exit_code: Option<i32>,
+    pub last_exit_signal: Option<String>,
     pub last_error: Option<String>,
+    pub last_reason: Option<String>,
     pub last_start_attempt_at: Option<u64>,
     pub backoff_until: Option<u64>,
     pub next_scheduled_restart_at: Option<u64>,
@@ -140,7 +148,9 @@ impl Default for AppRuntimeState {
             started_at: None,
             restart_count: 0,
             last_exit_code: None,
+            last_exit_signal: None,
             last_error: None,
+            last_reason: None,
             last_start_attempt_at: None,
             backoff_until: None,
             next_scheduled_restart_at: None,
@@ -152,6 +162,8 @@ impl Default for AppRuntimeState {
 pub struct AppSummary {
     pub name: String,
     pub cwd: String,
+    #[serde(default)]
+    pub command: Vec<String>,
     pub entry: String,
     pub restart: RestartPolicy,
     pub runtime: AppRuntimeState,
@@ -166,6 +178,7 @@ pub struct AppDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum IpcRequest {
+    Ping,
     Start {
         name: String,
     },
@@ -265,4 +278,75 @@ pub enum AgentEventKind {
     ProcessStarted,
     ProcessStopped,
     ProcessErrored,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PingData {
+    pub version: String,
+    pub pid: u32,
+}
+
+pub fn effective_command(spec: &AppSpec) -> Vec<String> {
+    if !spec.command.is_empty() {
+        return spec.command.clone();
+    }
+
+    let cwd = PathBuf::from(&spec.cwd);
+    let venv = if Path::new(&spec.venv).is_absolute() {
+        PathBuf::from(&spec.venv)
+    } else {
+        cwd.join(&spec.venv)
+    };
+    let uvicorn = venv.join("bin/uvicorn");
+    let mut cmd = if uvicorn.exists() {
+        vec![uvicorn.to_string_lossy().to_string(), spec.entry.clone()]
+    } else {
+        vec![
+            venv.join("bin/python").to_string_lossy().to_string(),
+            "-m".to_string(),
+            "uvicorn".to_string(),
+            spec.entry.clone(),
+        ]
+    };
+    cmd.extend(spec.args.clone());
+    cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn legacy_spec(cwd: String) -> AppSpec {
+        AppSpec {
+            name: "api".to_string(),
+            cwd,
+            command: Vec::new(),
+            venv: ".venv".to_string(),
+            entry: "app.main:app".to_string(),
+            args: vec!["--port".to_string(), "8000".to_string()],
+            autostart: true,
+            restart: RestartPolicy::OnFailure,
+            stop_signal: "SIGTERM".to_string(),
+            kill_timeout_ms: 8000,
+            restart_schedule: None,
+            env_file: None,
+            env: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn effective_command_prefers_uvicorn_binary_in_legacy_mode() {
+        let root = std::env::temp_dir().join(format!("pym2-model-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".venv/bin")).expect("create test dirs");
+        fs::write(root.join(".venv/bin/uvicorn"), b"#!/bin/sh\n").expect("touch uvicorn");
+
+        let spec = legacy_spec(root.to_string_lossy().to_string());
+        let cmd = effective_command(&spec);
+
+        assert!(cmd[0].ends_with("/.venv/bin/uvicorn"));
+        assert_eq!(cmd[1], "app.main:app");
+        let _ = fs::remove_dir_all(&root);
+    }
 }
