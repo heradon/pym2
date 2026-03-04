@@ -1,6 +1,6 @@
 use crate::error::{PyopsError, Result};
 use crate::ipc::server::{read_line_json, write_line_json};
-use crate::model::{AgentEvent, IpcRequest, IpcResponse, StreamLogEvent};
+use crate::model::{AgentEvent, IpcRequest, IpcResponse, PingData, StreamLogEvent};
 use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -17,16 +17,23 @@ impl IpcClient {
     }
 
     pub fn request(&self, req: IpcRequest) -> Result<IpcResponse> {
-        let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| {
-            PyopsError::Ipc(format!(
-                "failed to connect to agent socket {}: {} (is 'pym2 agent' running?)",
-                self.socket_path.display(),
-                e
-            ))
-        })?;
+        let mut stream = self.connect()?;
         write_line_json(&mut stream, &req)?;
         let resp: IpcResponse = read_line_json(&stream)?;
         Ok(resp)
+    }
+
+    pub fn ping(&self) -> Result<PingData> {
+        let resp = self.request(IpcRequest::Ping)?;
+        if !resp.ok {
+            return Err(PyopsError::Ipc(
+                resp.error.unwrap_or_else(|| "ping failed".to_string()),
+            ));
+        }
+        let data = resp
+            .data
+            .ok_or_else(|| PyopsError::Ipc("ping returned empty payload".to_string()))?;
+        Ok(serde_json::from_value(data)?)
     }
 
     pub fn stream_logs<F: FnMut(StreamLogEvent)>(
@@ -53,29 +60,25 @@ impl IpcClient {
     pub fn stream_logs_until<F, G>(
         &self,
         req: IpcRequest,
-        mut should_stop: G,
+        should_stop: G,
         mut on_line: F,
     ) -> Result<()>
     where
         F: FnMut(StreamLogEvent),
         G: FnMut() -> bool,
     {
-        self.stream_until(
-            req,
-            move || should_stop(),
-            move |data| {
-                let event: StreamLogEvent = serde_json::from_value(data)?;
-                on_line(event);
-                Ok(())
-            },
-        )
+        self.stream_until(req, should_stop, move |data| {
+            let event: StreamLogEvent = serde_json::from_value(data)?;
+            on_line(event);
+            Ok(())
+        })
     }
 
-    fn stream<F>(&self, req: IpcRequest, mut on_item: F) -> Result<()>
+    fn stream<F>(&self, req: IpcRequest, on_item: F) -> Result<()>
     where
         F: FnMut(serde_json::Value) -> Result<()>,
     {
-        self.stream_until(req, || false, move |data| on_item(data))
+        self.stream_until(req, || false, on_item)
     }
 
     fn stream_until<F, G>(&self, req: IpcRequest, mut should_stop: G, mut on_item: F) -> Result<()>
@@ -83,13 +86,7 @@ impl IpcClient {
         F: FnMut(serde_json::Value) -> Result<()>,
         G: FnMut() -> bool,
     {
-        let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| {
-            PyopsError::Ipc(format!(
-                "failed to connect to agent socket {}: {}",
-                self.socket_path.display(),
-                e
-            ))
-        })?;
+        let mut stream = self.connect()?;
 
         stream.set_read_timeout(Some(Duration::from_millis(250)))?;
         write_line_json(&mut stream, &req)?;
@@ -131,5 +128,15 @@ impl IpcClient {
         }
 
         Ok(())
+    }
+
+    fn connect(&self) -> Result<UnixStream> {
+        UnixStream::connect(&self.socket_path).map_err(|e| {
+            PyopsError::Ipc(format!(
+                "failed to connect to agent socket {}: {} (is 'pym2 agent' running?)",
+                self.socket_path.display(),
+                e
+            ))
+        })
     }
 }

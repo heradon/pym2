@@ -178,6 +178,7 @@ pub struct AppDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum IpcRequest {
+    Ping,
     Start {
         name: String,
     },
@@ -277,6 +278,12 @@ pub enum AgentEventKind {
     ProcessStarted,
     ProcessStopped,
     ProcessErrored,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PingData {
+    pub version: String,
+    pub agent_pid: u32,
 }
 
 pub fn effective_command(spec: &AppSpec) -> Vec<String> {

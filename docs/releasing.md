@@ -2,6 +2,11 @@
 
 Use this checklist before creating a new release tag.
 
+## 0) Version + changelog
+
+- Update `Cargo.toml` version (example: `1.2.0`)
+- Update `CHANGELOG.md`
+
 ## 1) Tests
 
 - `cargo test`
@@ -37,4 +42,7 @@ On a test host/VM:
 
 - Confirm `README.md` reflects current CLI/config behavior
 - Confirm changelog/release notes are up to date
-- Create and push release tag
+- Create and push release tag:
+  - `git tag v1.2.0`
+  - `git push origin v1.2.0`
+- On tagged builds, attach generated artifacts to the GitHub release

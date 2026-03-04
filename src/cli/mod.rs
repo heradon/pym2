@@ -7,10 +7,12 @@ use crate::error::{PyopsError, Result};
 use crate::ipc::client::IpcClient;
 use crate::model::{
     effective_command, AgentEvent, AppDetails, AppSpec, AppSummary, IpcRequest, LogSource,
-    RestartPolicy, StreamLogEvent,
+    PingData, RestartPolicy, StreamLogEvent,
 };
 use crate::schedule::parse_restart_schedule;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::collections::HashSet;
+use std::fs::OpenOptions;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -26,6 +28,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Agent,
+    Ping,
+    Doctor,
     Start {
         name: String,
     },
@@ -100,6 +104,15 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = CliRestartPolicy::OnFailure)]
         restart: CliRestartPolicy,
     },
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigCommands {
+    Lint,
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
@@ -145,6 +158,11 @@ pub fn run() -> Result<()> {
 
     match cli.command {
         Commands::Agent => agent::run_agent(),
+        Commands::Ping => {
+            let client = client_from_config()?;
+            ping(&client)
+        }
+        Commands::Doctor => doctor(),
         #[cfg(feature = "tui")]
         Commands::Tui => crate::tui::run(client_from_config()?),
         Commands::AddFastapi {
@@ -187,6 +205,9 @@ pub fn run() -> Result<()> {
             autostart,
             restart.into(),
         ),
+        Commands::Config { command } => match command {
+            ConfigCommands::Lint => lint_config(),
+        },
         command => {
             let client = client_from_config()?;
             run_client_command(command, &client)
@@ -201,6 +222,7 @@ fn run_client_command(command: Commands, client: &IpcClient) -> Result<()> {
         Commands::Restart { name } => simple_action(client, IpcRequest::Restart { name }),
         Commands::Status { json } => status(client, json),
         Commands::Inspect { name, json } => inspect(client, name, json),
+        Commands::Ping | Commands::Doctor => Ok(()),
         Commands::Logs {
             name,
             tail,
@@ -208,10 +230,95 @@ fn run_client_command(command: Commands, client: &IpcClient) -> Result<()> {
             source,
         } => logs(client, name, tail, follow, source.into()),
         Commands::Events { follow } => events(client, follow),
-        Commands::Agent | Commands::AddFastapi { .. } | Commands::AddCmd { .. } => Ok(()),
+        Commands::Config { .. }
+        | Commands::Agent
+        | Commands::AddFastapi { .. }
+        | Commands::AddCmd { .. } => Ok(()),
         #[cfg(feature = "tui")]
         Commands::Tui => Ok(()),
     }
+}
+
+fn ping(client: &IpcClient) -> Result<()> {
+    let info = client.ping()?;
+    println!(
+        "ok version={} agent_pid={}",
+        info.version.trim(),
+        info.agent_pid
+    );
+    Ok(())
+}
+
+fn doctor() -> Result<()> {
+    let mut has_error = false;
+    let os = std::env::consts::OS;
+    if os == "linux" {
+        println!("OS: ok (linux)");
+    } else {
+        println!("OS: fail ({}; pym2 is Linux-only)", os);
+        has_error = true;
+    }
+
+    let cfg_path = default_config_path()?;
+    println!("Config path: {}", cfg_path.display());
+
+    let cfg = load_config_or_defaults_for_client()?;
+    let socket = expand_tilde(&cfg.agent.socket)?;
+    if socket.exists() {
+        println!("Socket: ok ({})", socket.display());
+    } else {
+        println!(
+            "Socket: warn ({}) missing; agent may be stopped",
+            socket.display()
+        );
+    }
+
+    let client = IpcClient::new(socket.clone());
+    match client.ping() {
+        Ok(PingData { version, agent_pid }) => {
+            println!("Agent connect: ok (version={}, pid={})", version, agent_pid);
+        }
+        Err(err) => {
+            println!("Agent connect: fail ({})", err);
+            has_error = true;
+        }
+    }
+
+    let state_dir = expand_tilde(&cfg.agent.state_dir)?;
+    if ensure_dir_writable(&state_dir).is_ok() {
+        println!("State dir writable: ok ({})", state_dir.display());
+    } else {
+        println!("State dir writable: warn ({})", state_dir.display());
+    }
+
+    if let Some(parent) = cfg_path.parent() {
+        if ensure_dir_writable(parent).is_ok() {
+            println!("Config dir writable: ok ({})", parent.display());
+        } else {
+            println!(
+                "Config dir writable: warn ({}) (run as root to edit system config)",
+                parent.display()
+            );
+        }
+    }
+
+    println!(
+        "Web UI: {} on {}:{}",
+        if cfg.agent.web.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        cfg.agent.web.host,
+        cfg.agent.web.port
+    );
+
+    if has_error {
+        return Err(PyopsError::Config(
+            "doctor found critical issues".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn client_from_config() -> Result<IpcClient> {
@@ -435,6 +542,19 @@ fn events(client: &IpcClient, follow: bool) -> Result<()> {
     Ok(())
 }
 
+fn ensure_dir_writable(dir: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(format!(".pym2-write-test-{}", std::process::id()));
+    OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&probe)?;
+    std::fs::remove_file(&probe)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn add_fastapi(
     name: String,
     cwd: String,
@@ -559,6 +679,60 @@ fn add_app_to_config(app: AppSpec) -> Result<()> {
         }
         Err(err) => Err(err),
     }
+}
+
+fn lint_config() -> Result<()> {
+    let path = default_config_path()?;
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        PyopsError::Config(format!("failed to read config {}: {}", path.display(), e))
+    })?;
+    let cfg: crate::model::ConfigFile = toml::from_str(&content).map_err(|e| {
+        PyopsError::Config(format!("failed to parse config {}: {}", path.display(), e))
+    })?;
+    let mut errors = Vec::new();
+    let mut names = HashSet::new();
+
+    for app in &cfg.apps {
+        if app.name.trim().is_empty() {
+            errors.push("app name cannot be empty".to_string());
+            continue;
+        }
+        if !names.insert(app.name.clone()) {
+            errors.push(format!("duplicate app name '{}'", app.name));
+        }
+        if app.cwd.trim().is_empty() {
+            errors.push(format!("app '{}' has empty cwd", app.name));
+        }
+        if app.command.is_empty() {
+            if app.venv.trim().is_empty() || app.entry.trim().is_empty() {
+                errors.push(format!(
+                    "app '{}' missing command and legacy fields (need command[] or venv+entry)",
+                    app.name
+                ));
+            }
+        } else if app.command[0].trim().is_empty() {
+            errors.push(format!("app '{}' command executable is empty", app.name));
+        }
+        if let Some(schedule) = app.restart_schedule.as_ref() {
+            if let Err(err) = parse_restart_schedule(schedule) {
+                errors.push(format!(
+                    "app '{}' invalid restart_schedule '{}': {}",
+                    app.name, schedule, err
+                ));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        println!("config lint OK: {}", path.display());
+        return Ok(());
+    }
+
+    eprintln!("config lint FAILED: {}", path.display());
+    for err in errors {
+        eprintln!("- {}", err);
+    }
+    Err(PyopsError::Config("config lint failed".to_string()))
 }
 
 fn log_paths_for_app(name: &str) -> Result<(std::path::PathBuf, std::path::PathBuf)> {

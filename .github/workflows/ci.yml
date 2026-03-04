@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master", "next/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-stable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust versions
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Format check
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
+
+      - name: Tests (all features)
+        run: cargo test --all-features
+
+      - name: Smoke test (Linux only)
+        run: bash scripts/smoke.sh
+
+      - name: Packaging sanity
+        run: |
+          cargo build --release
+          test -f systemd/pym2.service
+
+  non-linux-sanity:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Sanity
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          cargo fmt -- --check
+          echo "pym2 is Linux-only; compile/runtime tests are intentionally skipped on $RUNNER_OS."

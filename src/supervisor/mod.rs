@@ -249,10 +249,11 @@ impl Supervisor {
             }
 
             if scheduled_restart_due {
-                if scheduled_restart_allowed {
-                    if self.stop_one(&name).is_ok() && self.start_one(&name).is_ok() {
-                        changed = true;
-                    }
+                if scheduled_restart_allowed
+                    && self.stop_one(&name).is_ok()
+                    && self.start_one(&name).is_ok()
+                {
+                    changed = true;
                 }
                 self.refresh_schedule_target_for(&name, unix_now());
             }

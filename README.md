@@ -36,6 +36,12 @@ port = 17877
 - `port`: HTTP port
 - `password`: optional on loopback; required when `enabled=true` and host is non-loopback
 
+Security defaults:
+- bind defaults to `127.0.0.1`
+- non-loopback bind requires `password`
+- prefer reverse proxy + TLS for any remote access
+- send auth as `Authorization: Bearer <password>` or `X-Pym2-Password: <password>`
+
 ## Build
 
 ```bash
@@ -66,6 +72,9 @@ pym2 status [--json]
 pym2 inspect <name> [--json]
 pym2 logs <name> -f
 pym2 events --follow
+pym2 ping
+pym2 doctor
+pym2 config lint
 
 # TUI
 pym2 tui
@@ -100,6 +109,7 @@ env = { PYTHONUNBUFFERED = "1" }
 
 Legacy mode is still supported if `command` is empty:
 - set `venv`, `entry`, and optional `args`
+- this mode is deprecated; prefer `command[]` for new apps
 
 ## Migration (legacy -> command)
 
@@ -129,6 +139,33 @@ command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--po
 
 Crash-loop protection default:
 - more than `5` restarts in `60` seconds -> app status `Errored` with reason `max_restarts_exceeded`
+
+## Install
+
+- Debian/Ubuntu: build and install `.deb` via `./scripts/build-deb.sh --arch amd64` (or `arm64`)
+- Fedora/CentOS/RHEL/Rocky: build and install `.rpm` via `./scripts/build-rpm.sh --arch x86_64` (or `aarch64`)
+- Manual binary install:
+  - copy binary to `/usr/bin/pym2`
+  - install `systemd/pym2.service` to `/etc/systemd/system/pym2.service`
+
+Systemd quickstart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now pym2
+sudo systemctl status pym2
+```
+
+## Uninstall
+
+```bash
+sudo systemctl disable --now pym2 || true
+sudo rm -f /etc/systemd/system/pym2.service
+sudo systemctl daemon-reload
+sudo rm -f /usr/bin/pym2
+sudo rm -rf /run/pym2 /var/lib/pym2
+sudo rm -rf /etc/pym2
+```
 
 ## Packaging
 
