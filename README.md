@@ -2,6 +2,14 @@
 
 `pym2` is a Linux-only process manager for Python projects (PM2-like), focused on small binary size, performance, and robustness.
 
+## Quickstart
+
+```bash
+pym2 add-fastapi --name api --cwd /srv/api --entry app:app
+pym2 start api
+pym2 status
+```
+
 ## Features
 
 - Agent/daemon mode with Unix Domain Socket IPC
@@ -41,6 +49,7 @@ Security defaults:
 - non-loopback bind requires `password`
 - prefer reverse proxy + TLS for any remote access
 - send auth as `Authorization: Bearer <password>` or `X-Pym2-Password: <password>`
+- startup is refused without token on public bind: `Refusing to bind Web UI to public interface without auth token.`
 
 ## Build
 
@@ -139,6 +148,7 @@ command = ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--po
 
 Crash-loop protection default:
 - more than `5` restarts in `60` seconds -> app status `Errored` with reason `max_restarts_exceeded`
+- if a service restarts too often in a short window, pym2 stops restarting it and reports an error reason
 
 ## Install
 
