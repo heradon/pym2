@@ -150,11 +150,10 @@ impl From<CliRestartPolicy> for RestartPolicy {
 }
 
 pub fn run() -> Result<()> {
-    if !cfg!(target_os = "linux") {
+    let cli = Cli::parse();
+    if !cfg!(target_os = "linux") && !matches!(cli.command, Commands::Doctor) {
         return Err(PyopsError::Config("pym2 is Linux-only".to_string()));
     }
-
-    let cli = Cli::parse();
 
     match cli.command {
         Commands::Agent => agent::run_agent(),
@@ -241,62 +240,88 @@ fn run_client_command(command: Commands, client: &IpcClient) -> Result<()> {
 
 fn ping(client: &IpcClient) -> Result<()> {
     let info = client.ping()?;
-    println!(
-        "ok version={} agent_pid={}",
-        info.version.trim(),
-        info.agent_pid
-    );
+    println!("Agent OK");
+    println!("version: {}", info.version.trim());
+    println!("pid: {}", info.pid);
     Ok(())
 }
 
 fn doctor() -> Result<()> {
-    let mut has_error = false;
+    let mut hard_fail = false;
     let os = std::env::consts::OS;
     if os == "linux" {
-        println!("OS: ok (linux)");
+        println!("[OK] OS: Linux");
     } else {
-        println!("OS: fail ({}; pym2 is Linux-only)", os);
-        has_error = true;
+        println!("[WARN] OS: {} (pym2 is Linux-only)", os);
     }
 
     let cfg_path = default_config_path()?;
-    println!("Config path: {}", cfg_path.display());
-
-    let cfg = load_config_or_defaults_for_client()?;
+    let cfg = match load_config_from(&cfg_path) {
+        Ok(cfg) => {
+            println!("[OK] Config loaded: {}", cfg_path.display());
+            cfg
+        }
+        Err(err) => {
+            println!("[ERR] Config load failed: {} ({})", cfg_path.display(), err);
+            hard_fail = true;
+            load_config_or_defaults_for_client()?
+        }
+    };
     let socket = expand_tilde(&cfg.agent.socket)?;
     if socket.exists() {
-        println!("Socket: ok ({})", socket.display());
+        println!("[OK] Agent socket exists: {}", socket.display());
     } else {
         println!(
-            "Socket: warn ({}) missing; agent may be stopped",
+            "[WARN] Agent socket missing: {} (start with 'pym2 agent')",
             socket.display()
         );
     }
 
     let client = IpcClient::new(socket.clone());
     match client.ping() {
-        Ok(PingData { version, agent_pid }) => {
-            println!("Agent connect: ok (version={}, pid={})", version, agent_pid);
+        Ok(PingData { version, pid }) => {
+            println!("[OK] Agent socket reachable");
+            println!("[OK] Agent version: {}", version);
+            println!("[OK] Agent pid: {}", pid);
         }
         Err(err) => {
-            println!("Agent connect: fail ({})", err);
-            has_error = true;
+            println!("[ERR] Agent unreachable: {}", err);
+            hard_fail = true;
         }
     }
 
     let state_dir = expand_tilde(&cfg.agent.state_dir)?;
+    let runtime_state = state_dir.join("runtime_state.json");
+    match std::fs::read_to_string(&runtime_state) {
+        Ok(_) => println!("[OK] Runtime state readable: {}", runtime_state.display()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "[WARN] Runtime state missing: {} (agent may not have persisted state yet)",
+                runtime_state.display()
+            );
+        }
+        Err(err) => {
+            println!(
+                "[ERR] Runtime state unreadable: {} ({})",
+                runtime_state.display(),
+                err
+            );
+            hard_fail = true;
+        }
+    }
+
     if ensure_dir_writable(&state_dir).is_ok() {
-        println!("State dir writable: ok ({})", state_dir.display());
+        println!("[OK] State dir writable: {}", state_dir.display());
     } else {
-        println!("State dir writable: warn ({})", state_dir.display());
+        println!("[WARN] State dir not writable: {}", state_dir.display());
     }
 
     if let Some(parent) = cfg_path.parent() {
         if ensure_dir_writable(parent).is_ok() {
-            println!("Config dir writable: ok ({})", parent.display());
+            println!("[OK] Config dir writable: {}", parent.display());
         } else {
             println!(
-                "Config dir writable: warn ({}) (run as root to edit system config)",
+                "[WARN] Config dir not writable: {} (run as root to edit system config)",
                 parent.display()
             );
         }
@@ -313,7 +338,7 @@ fn doctor() -> Result<()> {
         cfg.agent.web.port
     );
 
-    if has_error {
+    if hard_fail {
         return Err(PyopsError::Config(
             "doctor found critical issues".to_string(),
         ));
@@ -689,37 +714,41 @@ fn lint_config() -> Result<()> {
     let cfg: crate::model::ConfigFile = toml::from_str(&content).map_err(|e| {
         PyopsError::Config(format!("failed to parse config {}: {}", path.display(), e))
     })?;
-    let mut errors = Vec::new();
+    let mut errors: Vec<(String, Vec<String>)> = Vec::new();
     let mut names = HashSet::new();
 
     for app in &cfg.apps {
+        let name = if app.name.trim().is_empty() {
+            "<unnamed>".to_string()
+        } else {
+            app.name.clone()
+        };
+        let mut app_errors = Vec::new();
+
         if app.name.trim().is_empty() {
-            errors.push("app name cannot be empty".to_string());
-            continue;
+            app_errors.push("name missing".to_string());
         }
         if !names.insert(app.name.clone()) {
-            errors.push(format!("duplicate app name '{}'", app.name));
+            app_errors.push("duplicate name".to_string());
         }
         if app.cwd.trim().is_empty() {
-            errors.push(format!("app '{}' has empty cwd", app.name));
+            app_errors.push("cwd missing".to_string());
         }
         if app.command.is_empty() {
             if app.venv.trim().is_empty() || app.entry.trim().is_empty() {
-                errors.push(format!(
-                    "app '{}' missing command and legacy fields (need command[] or venv+entry)",
-                    app.name
-                ));
+                app_errors.push("command empty (and legacy fields missing)".to_string());
             }
         } else if app.command[0].trim().is_empty() {
-            errors.push(format!("app '{}' command executable is empty", app.name));
+            app_errors.push("command executable is empty".to_string());
         }
         if let Some(schedule) = app.restart_schedule.as_ref() {
             if let Err(err) = parse_restart_schedule(schedule) {
-                errors.push(format!(
-                    "app '{}' invalid restart_schedule '{}': {}",
-                    app.name, schedule, err
-                ));
+                app_errors.push(format!("invalid restart_schedule '{}': {}", schedule, err));
             }
+        }
+
+        if !app_errors.is_empty() {
+            errors.push((name, app_errors));
         }
     }
 
@@ -728,9 +757,14 @@ fn lint_config() -> Result<()> {
         return Ok(());
     }
 
-    eprintln!("config lint FAILED: {}", path.display());
-    for err in errors {
-        eprintln!("- {}", err);
+    eprintln!("Config errors:");
+    eprintln!();
+    for (app, app_errors) in errors {
+        eprintln!("app \"{}\"", app);
+        for err in app_errors {
+            eprintln!("  - {}", err);
+        }
+        eprintln!();
     }
     Err(PyopsError::Config("config lint failed".to_string()))
 }

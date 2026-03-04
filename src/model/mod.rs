@@ -283,7 +283,7 @@ pub enum AgentEventKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PingData {
     pub version: String,
-    pub agent_pid: u32,
+    pub pid: u32,
 }
 
 pub fn effective_command(spec: &AppSpec) -> Vec<String> {

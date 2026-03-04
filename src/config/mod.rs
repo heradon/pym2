@@ -152,8 +152,7 @@ fn validate_config(cfg: &ConfigFile) -> Result<()> {
             Some(password) if !password.is_empty() => {}
             _ => {
                 return Err(PyopsError::Config(
-                    "agent.web.password must be set when web is enabled on a non-loopback host"
-                        .to_string(),
+                    "Refusing to bind Web UI to public interface without auth token.".to_string(),
                 ));
             }
         }
@@ -223,7 +222,7 @@ mod tests {
         cfg.agent.web.password = None;
 
         let err = validate_config(&cfg).expect_err("config should fail without password");
-        assert!(err.to_string().contains("agent.web.password"));
+        assert!(err.to_string().contains("Refusing to bind Web UI"));
     }
 
     #[test]
@@ -245,7 +244,7 @@ mod tests {
         cfg.agent.web.password = None;
 
         let err = validate_config(&cfg).expect_err("web checks must still run");
-        assert!(err.to_string().contains("agent.web.password"));
+        assert!(err.to_string().contains("Refusing to bind Web UI"));
     }
 
     #[test]

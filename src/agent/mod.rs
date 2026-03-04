@@ -183,7 +183,7 @@ fn dispatch(
     let resp = match req {
         IpcRequest::Ping => IpcResponse::ok(json!({
             "version": env!("CARGO_PKG_VERSION"),
-            "agent_pid": std::process::id()
+            "pid": std::process::id()
         })),
         IpcRequest::Start { name } => match sup.start(&name) {
             Ok(started) => IpcResponse::ok(json!({ "started": started })),
