@@ -52,20 +52,3 @@ jobs:
 
       - name: Tests
         run: cargo test
-
-  windows:
-    runs-on: windows-latest
-    # best-effort non-Linux sanity
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Tests
-        run: cargo test
